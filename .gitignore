@@ -25,6 +25,9 @@ playwright-report/
 godot/.godot/
 .impeccable/mocks/
 
+# The demo video's source files and script, kept apart from the project
+demo-video/
+
 # Generated output
 artifacts/
 .mypy_cache/
