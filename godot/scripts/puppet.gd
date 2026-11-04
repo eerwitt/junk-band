@@ -11,6 +11,8 @@ const SLIDE_FLOOR_OMEGA: float = 10.5
 ## How far a new character falls when it first joins the band, against an ordinary drop.
 const HERO_DROP_HEIGHT: float = 120.0
 const DEPART_TIME: float = 0.34
+## How far back along x a route has to go before the character turns to face that way.
+const PATH_TURN_DISTANCE: float = 10.0
 ## Dance styles. Each character keeps one, chosen from its id, so the band never moves as one.
 const GROOVE_SWAY: int = 0
 const GROOVE_BOB: int = 1
@@ -73,6 +75,7 @@ var _edge_material: ShaderMaterial
 var _shadow_material: ShaderMaterial
 var _cardboard_yaw: float = -0.28
 var _facing: float = 1.0
+var _heading_extreme: float = 0.0
 var _thickness: float = 1.0
 var _material_id: String = ""
 var _uploaded_yaw: float = INF
@@ -512,11 +515,17 @@ func pose(beat_value: float, reduced_motion: bool, delta: float = 0.0, note_puls
 		turn = lerp_angle(_body.rotation, target_turn, 1.0 - exp(-18.0 * delta))
 	if _body.texture != null:
 		_body.offset = _pivot_offset(pivot)
+	# Only while actually travelling the route: held, settling, or waiting in the wings it is not
+	# where the route is, and must not keep turning round on the spot.
+	var on_path: bool = not path_knots.is_empty() and not _held and not _settling and not _path_handoff and presence >= 1.0
 	if walking:
 		set_facing(_walk_heading)
-	elif not path_knots.is_empty() and not _held:
-		var path_tangent: Vector2 = JunkMotionMath.path_position(path_knots, b + 0.025) - JunkMotionMath.path_position(path_knots, b)
-		if absf(path_tangent.x) > 0.05: set_facing(path_tangent.x)
+	elif on_path:
+		# A drawn route wobbles with the hand that drew it. Turn only once really heading back,
+		# or every wobble flips the cutout through its edge.
+		if (position.x - _heading_extreme) * _facing > 0.0: _heading_extreme = position.x
+		elif absf(position.x - _heading_extreme) > PATH_TURN_DISTANCE: set_facing(position.x - _heading_extreme)
+	if not on_path: _heading_extreme = position.x
 	var target_yaw: float = -0.28 if _facing > 0.0 else PI + 0.28
 	# Freeze yaw while pinched: the inverse material grip remains exact.
 	if not _held:

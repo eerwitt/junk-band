@@ -21,6 +21,7 @@ func _run() -> void:
 	_test_landing_contact(puppet._source_art)
 	_test_drop_response(puppet._source_art)
 	_test_impact_reaction(puppet._source_art)
+	_test_path_facing(puppet._source_art)
 	var initial: Vector2 = puppet.position
 	var foot_y: float = (puppet._foot_y_pixels - puppet._art_padding - 0.85 * puppet._art_size.y) * puppet._base_scale
 	assert((puppet._shadow.transform * Vector2(0, foot_y / puppet._base_scale)).distance_to(Vector2(0, foot_y)) < 0.01)
@@ -105,6 +106,14 @@ func _run() -> void:
 	for index: int in range(30): low = JunkMotionMath.spring(low[0], low[1], Vector2(100, 50), 1.0 / 60, true)
 	for index: int in range(60): high = JunkMotionMath.spring(high[0], high[1], Vector2(100, 50), 1.0 / 120, true)
 	assert(low[0].distance_to(high[0]) < 0.001, "Elastic recoil must also be independent of frame rate")
+	var route: PackedVector2Array = stage._sample_path("test")
+	var inked: Array[float] = []
+	for frame: int in range(12):
+		var length: float = 0.0
+		for dash: PackedVector2Array in stage.route_dashes(route, 10.0 + frame / 30.0):
+			for index: int in range(1, dash.size()): length += dash[index].distance_to(dash[index - 1])
+		inked.append(length)
+	assert(inked.min() > inked.max() * 0.9, "The marching route must not blink as its dashes move (%s)" % [inked])
 	stage.cancel_path()
 	var camera_pointer: Vector2 = stage.size * Vector2(0.4, 0.35)
 	var camera_anchor: Vector2 = stage._world_point(camera_pointer)
@@ -285,6 +294,39 @@ func _test_impact_reaction(texture: Texture2D) -> void:
 		assert(is_zero_approx(bumped) if reduced else bumped > 4.0, "Neighbour jolts apply outside reduced motion")
 		effect.free()
 		puppet.free()
+
+
+## A hand-drawn route wobbles. The cutout should turn only where the route really heads back,
+## and never while it is held, settling or waiting off stage away from its route.
+func _test_path_facing(texture: Texture2D) -> void:
+	var points := PackedVector2Array()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3
+	for index: int in range(60):
+		points.append(Vector2(sin(index / 9.0) * 40.0 + rng.randf_range(-3, 3), index * 4.0 if index < 30 else (60 - index) * 4.0))
+	var performer: Dictionary = {"id": "facing-test", "position": {"x": points[0].x, "y": points[0].y}, "path": JunkMotionMath.recorded_path(points)}
+	var puppet := JunkPuppet.new()
+	root.add_child(puppet)
+	puppet.performer = performer
+	puppet.path_knots = JunkMotionMath.closed_path(performer)
+	puppet.set_art(texture)
+	var turns: int = 0
+	var facing: float = puppet._facing
+	var beat_value: float = 0.0
+	while beat_value < JunkLoopTiming.BEATS:
+		puppet.pose(beat_value, false, 1.0 / 60.0)
+		if puppet._facing != facing: turns += 1
+		facing = puppet._facing
+		beat_value += 2.0 / 60.0
+	assert(turns >= 1 and turns <= 3, "A wobbly route must turn the cutout only where it heads back, not on every wobble (%d turns)" % turns)
+	# Waiting in the wings for a section it sits out: standing still, so it must not turn round.
+	puppet.snap_present()
+	puppet.drop_offstage(Vector2(-440, -175))
+	for frame: int in range(240):
+		puppet.pose(beat_value, false, 1.0 / 60.0)
+		beat_value += 2.0 / 60.0
+		if frame > 60: assert(puppet._facing == facing, "A character away from its route must not keep turning to follow it")
+	puppet.queue_free()
 
 
 func _test_drop_response(texture: Texture2D) -> void:

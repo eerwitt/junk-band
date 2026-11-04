@@ -792,21 +792,40 @@ func _draw_route(points: PackedVector2Array) -> void:
 	var samples: int = points.size() - 1
 	var current: float = bridge.beat() if bridge != null else 0.0
 	var colour := Color(0.72, 0.40, 0.22, 0.55)
-	var per_beat: float = float(samples) / JunkLoopTiming.BEATS
-	var march: float = 0.0 if reduced_motion else current * 2.0
-	var dash := PackedVector2Array()
-	for index: int in range(samples + 1):
-		var on: bool = fposmod(float(index) / per_beat * 2.0 - march, 1.0) < 0.6
-		if on: dash.append(points[index])
-		if (not on or index == samples) and dash.size() > 1:
-			draw_polyline(dash, colour, 2.0, true)
-		if not on: dash.clear()
+	for dash: PackedVector2Array in route_dashes(points, current):
+		draw_polyline(dash, colour, 2.0, true)
 	if selected_id == _ink_in_id and _ink_in_age < 0.9:
 		var sweep: float = smoothstep(0.0, 0.55, _ink_in_age)
 		var fade: float = 1.0 - smoothstep(0.55, 0.9, _ink_in_age)
 		var reach: int = maxi(2, int(sweep * samples))
 		draw_polyline(points.slice(0, reach + 1), Color(0.62, 0.30, 0.14, 0.85 * fade), 3.2, true)
 		draw_circle(points[reach], 4.0 * fade + 1.0, Color(0.62, 0.30, 0.14, fade), true, -1, true)
+
+
+## The route's dashes, half a beat apart and marching with the song. Each is cut at its exact
+## beats rather than switched per sample: a half-beat dash spans only two samples, so whole
+## samples blinking on and off strobed the entire line.
+func route_dashes(points: PackedVector2Array, current: float) -> Array[PackedVector2Array]:
+	var dashes: Array[PackedVector2Array] = []
+	var step: float = JunkLoopTiming.BEATS / (points.size() - 1)
+	var offset: float = 0.0 if reduced_motion else fposmod(current * 2.0, 1.0)
+	for half_beat: int in range(-1, int(JunkLoopTiming.BEATS * 2.0) + 1):
+		var from: float = maxf((half_beat + offset) * 0.5, 0.0)
+		var to: float = minf((half_beat + offset + 0.6) * 0.5, JunkLoopTiming.BEATS)
+		if to <= from: continue
+		var dash := PackedVector2Array([_route_at(points, from)])
+		for index: int in range(ceili(from / step), floori(to / step) + 1):
+			if index * step > from and index * step < to: dash.append(points[index])
+		dash.append(_route_at(points, to))
+		dashes.append(dash)
+	return dashes
+
+
+## A point on a sampled route at any beat, between its samples.
+func _route_at(points: PackedVector2Array, beat_value: float) -> Vector2:
+	var place: float = clampf(beat_value / JunkLoopTiming.BEATS, 0.0, 1.0) * (points.size() - 1)
+	var index: int = mini(int(place), points.size() - 2)
+	return points[index].lerp(points[index + 1], place - index)
 
 
 func _dragged_is_tuned() -> bool:
