@@ -1,0 +1,1 @@
+"""JUNK service adapters."""

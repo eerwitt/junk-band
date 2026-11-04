@@ -1,0 +1,23 @@
+{
+  "name": "junk-living-sampler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "python scripts/dev.py",
+    "build": "python scripts/build_web.py",
+    "typecheck": "node scripts/build_browser.cjs --check",
+    "format": "prettier --write src web tests scripts/*.cjs *.json *.md docs",
+    "format:check": "prettier --check src web tests scripts/*.cjs *.json *.md docs",
+    "test": "node scripts/build_browser.cjs && node --test tests/core.test.mjs",
+    "test:e2e": "python scripts/check_godot_browser.py",
+    "check": "npm run typecheck && npm test && npm run format:check"
+  },
+  "dependencies": {
+    "zod": "file:vendor/zod-4.1.8.tgz"
+  },
+  "devDependencies": {
+    "prettier": "file:vendor/prettier-2.8.8.tgz",
+    "typescript": "file:vendor/typescript-5.9.3.tgz"
+  }
+}

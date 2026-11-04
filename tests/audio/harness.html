@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>JUNK audio engine verification harness</title>
+  <h1>JUNK audio engine verification harness</h1>
+  <p>
+    This tests the production audio engine with a native AudioContext adapter.
+    It does not represent the studio interface or validate the Godot bridge.
+  </p>
+  <button id="play">Play</button>
+  <button id="pause">Pause</button>
+  <button id="export">Export WAV</button>
+  <output id="status">Loading</output>
+  <script type="importmap">
+    { "imports": { "zod": "/vendor/zod/index.js" } }
+  </script>
+  <script type="module">
+    import { AudioEngine } from "./src/audio/engine.js";
+    import { demoProject, projectSchema } from "./src/domain/project.js";
+    import { download } from "./src/audio/wav.js";
+    import { compileEvents } from "./src/domain/music.js";
+    import { setSectionKind } from "./src/domain/arrangement.js";
+    const context = new AudioContext();
+    const audio = new AudioEngine(
+      async () => context,
+      async () => undefined
+    );
+    const project = projectSchema.parse(demoProject());
+    window.testStudio = {
+      audio,
+      project,
+      context,
+      compileEvents,
+      demoProject,
+      AudioEngine,
+      setSectionKind,
+    };
+    document.querySelector("#play").onclick = async () => {
+      await audio.play(window.testStudio.project);
+      document.querySelector("#status").textContent = "Playing";
+    };
+    document.querySelector("#pause").onclick = () => {
+      audio.pause();
+      document.querySelector("#status").textContent = "Paused";
+    };
+    document.querySelector("#export").onclick = async () => {
+      download(
+        await audio.export(window.testStudio.project),
+        "junk-starter.wav"
+      );
+      document.querySelector("#status").textContent = "Exported";
+    };
+    document.querySelector("#status").textContent = "Ready";
+  </script>
+</html>
