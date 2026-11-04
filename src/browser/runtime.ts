@@ -58,7 +58,10 @@ const settingsSchema = z
   .strict();
 
 export async function startRuntime(): Promise<JunkBridgeAPI> {
-  const store = new StudioStore((id) => emit({ type: "arrival", id }));
+  const store = new StudioStore(
+    (id, kind, source) => emit({ type: "arrival", id, kind, source }),
+    (id) => emit({ type: "departure", id })
+  );
   const media = new AddStudio(store);
   const callbacks = new Map<number, (message: string) => void>();
   const textures = new Map<string, string>(),

@@ -10,9 +10,15 @@ signal clear_path_requested(id: String)
 ## The character to hear clearly over a quiet band, or "" to give the song back.
 signal spotlight_changed(id: String)
 signal tapped(id: String)
+## The cards have finished dealing out, so every control is where it will stay.
+signal settled
 
 const CARD_PANEL_WIDTH: float = 356.0
 const TAP_RESTART_MS: int = 2000
+const DEAL_STAGGER: float = 0.016
+const DEAL_TIME: float = 0.2
+const CARD_DROP_TIME: float = 0.22
+const SETTLE_TIME: float = DEAL_STAGGER * 8.0 + DEAL_TIME
 const RHYTHM_CARDS: Dictionary = {
 	"Steady": [0, 4, 8, 12],
 	"Offbeat": [2, 6, 10, 14],
@@ -41,6 +47,10 @@ var _tuned: CheckBox
 var _card_panel: PanelContainer
 var _holes: JunkPunchCard
 var _last_tap_ms: int = -100000
+## Seconds since the menu or the rhythm card opened, for the cards fanning out.
+var _open_age: float = 10.0
+var _card_age: float = 10.0
+var reduced_motion: bool = false
 ## The song's position, for the moving mark on the card and for tapping in time.
 var beat: float = 0.0:
 	set(value):
@@ -150,6 +160,7 @@ func _build_card_panel() -> void:
 func _set_card_open(open: bool) -> void:
 	if _card_panel.visible == open: return
 	_card_panel.visible = open
+	if open: _card_age = 10.0 if reduced_motion else 0.0
 	spotlight_changed.emit(performer_id if open else "")
 
 
@@ -173,13 +184,14 @@ func _set_pattern(pattern: Array) -> void:
 		for step: int in pattern:
 			steps.append(bar * 16 + step)
 	steps.sort()
-	_show_pattern(pattern)
+	_show_pattern(pattern, true)
 	_change({"steps": steps})
 
 
-func _show_pattern(pattern: Array) -> void:
+func _show_pattern(pattern: Array, animate: bool = false) -> void:
 	var holes: Dictionary = {}
 	for step: int in pattern: holes[step] = true
+	if animate: _holes.animate_change(holes)
 	_holes.pattern = holes
 	_holes.queue_redraw()
 
@@ -207,6 +219,7 @@ func _tap() -> void:
 	var pattern: Array = [] if now - _last_tap_ms > TAP_RESTART_MS else _holes.pattern.keys()
 	_last_tap_ms = now
 	var step: int = posmod(roundi(beat * 4.0), 16)
+	_holes.flash(step)
 	if not pattern.has(step): pattern.append(step)
 	_set_pattern(pattern)
 
@@ -287,10 +300,49 @@ func sync(performer: Dictionary) -> void:
 
 func open_for(performer: Dictionary, anchor: Vector2) -> void:
 	_set_card_open(false)
+	var reopened: bool = visible and performer_id == str(performer.id)
 	performer_id = str(performer.id)
 	sync(performer)
+	if not reopened: _open_age = 10.0 if reduced_motion else 0.0
 	show()
 	arrange(anchor)
+
+
+func _process(delta: float) -> void:
+	if not visible: return
+	var was_settled: bool = is_settled()
+	_open_age += delta
+	_card_age += delta
+	if is_settled() and not was_settled: settled.emit()
+
+
+## Open, and nothing is still flying into place.
+func is_settled() -> bool:
+	return visible and _open_age >= SETTLE_TIME and (not _card_panel.visible or _card_age >= CARD_DROP_TIME)
+
+
+## Back-out ease: overshoots a touch past 1 and settles, like card snapping into place.
+static func _snap(t: float) -> float:
+	var x: float = clampf(t, 0.0, 1.0) - 1.0
+	return 1.0 + x * x * (2.7 * x + 1.7)
+
+
+## Each piece flies out from the character in turn, turning flat as it lands.
+func _deal(control: Control, center: Vector2, target: Vector2, order: int) -> void:
+	var t: float = clampf((_open_age - order * DEAL_STAGGER) / DEAL_TIME, 0.0, 1.0)
+	if t >= 1.0:
+		control.position = target
+		control.scale = Vector2.ONE
+		control.rotation = 0.0
+		control.modulate.a = 1.0 if control != _duplicate or not _duplicate.disabled else 0.45
+		return
+	var eased: float = _snap(t)
+	control.pivot_offset = control.size * 0.5
+	var home: Vector2 = center - control.size * 0.5
+	control.position = home.lerp(target, eased)
+	control.scale = Vector2.ONE * lerpf(0.35, 1.0, minf(eased, 1.08))
+	control.rotation = (1.0 - eased) * (0.35 if order % 2 == 0 else -0.35)
+	control.modulate.a = smoothstep(0.0, 0.35, t) * (1.0 if control != _duplicate or not _duplicate.disabled else 0.45)
 
 
 func arrange(anchor: Vector2) -> void:
@@ -301,22 +353,31 @@ func arrange(anchor: Vector2) -> void:
 	_blur.size = Vector2.ONE * radius * 2.0
 	_back_buffer.rect = Rect2(_blur.position - Vector2.ONE * 6.0, _blur.size + Vector2.ONE * 12.0)
 	var offsets: Array[Vector2] = [Vector2(-62, -155), Vector2(-180, -30), Vector2(56, -30), Vector2(-83, 82)]
-	for index: int in range(_cards.size()):
-		_cards[index].position = center + offsets[index]
-	_skull.position = center + Vector2(104, 92)
-	_pencil.position = center + Vector2(-180, 92)
-	_eraser.position = center + Vector2(-128, 92)
+	_blur.modulate.a = smoothstep(0.0, 0.16, _open_age)
+	# Dealt clockwise from the top, so the circle visibly opens out around the character.
+	_deal(_cards[0], center, center + offsets[0], 0)
+	_deal(_duplicate, center, center + Vector2(70, -150), 1)
+	_deal(_cards[2], center, center + offsets[2], 2)
+	_deal(_skull, center, center + Vector2(104, 92), 3)
+	_deal(_cards[3], center, center + offsets[3], 4)
+	_deal(_eraser, center, center + Vector2(-128, 92), 5)
+	_deal(_pencil, center, center + Vector2(-180, 92), 6)
+	_deal(_cards[1], center, center + offsets[1], 7)
+	_deal(_punch, center, center + Vector2(-118, -150), 8)
 	# Up beside Volume, well away from the skull.
-	_duplicate.position = center + Vector2(70, -150)
-	_punch.position = center + Vector2(-118, -150)
-	_card_panel.position = center + Vector2(-CARD_PANEL_WIDTH * 0.5, 232)
+	var card_target: Vector2 = center + Vector2(-CARD_PANEL_WIDTH * 0.5, 232)
+	var drop: float = 1.0 if reduced_motion or _card_age >= CARD_DROP_TIME else _snap(_card_age / CARD_DROP_TIME)
+	_card_panel.position = card_target + Vector2(0, (1.0 - drop) * -40.0)
+	_card_panel.pivot_offset = Vector2(CARD_PANEL_WIDTH * 0.5, 0)
+	_card_panel.scale = Vector2(1.0, lerpf(0.6, 1.0, minf(drop, 1.04)))
+	_card_panel.modulate.a = clampf(drop * 1.6, 0.0, 1.0)
 
 
 func set_stage_full(full: bool) -> void:
 	if _duplicate == null: return
 	_duplicate.disabled = full
 	_duplicate.tooltip_text = "The stage is full. Remove someone to make room." if full else "Duplicate"
-	_duplicate.modulate.a = 0.45 if full else 1.0
+	if _open_age > 1.0: _duplicate.modulate.a = 0.45 if full else 1.0
 
 
 func close() -> void:

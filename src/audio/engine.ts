@@ -450,17 +450,23 @@ export class AudioEngine {
   visualFrame(): string {
     const beat = this.beat();
     const pulses: Record<string, number> = {};
+    // The newest hit that has sounded, per character: [age in seconds, velocity].
+    // Overlapping fast hits merge in `pulses`, so onsets are read from here.
+    const onsets: Record<string, [number, number]> = {};
     if (this.context) {
       for (const hit of this.visualHits) {
-        const pulse =
-          pulseAtAge(this.context.currentTime - hit.time, hit.duration) *
-          hit.velocity;
+        const age = this.context.currentTime - hit.time;
+        const pulse = pulseAtAge(age, hit.duration) * hit.velocity;
         pulses[hit.id] = Math.max(pulses[hit.id] ?? 0, pulse);
+        const newest = onsets[hit.id];
+        if (age >= 0 && age < 1 && (!newest || age < newest[0]))
+          onsets[hit.id] = [age, hit.velocity];
       }
     }
     return JSON.stringify({
       beat,
       pulses,
+      onsets,
       playing: this.playing,
       masterPulse: this.playing
         ? pulseAtAge(beat % 1, 0.55) * (Math.floor(beat) % 4 === 0 ? 1 : 0.7)

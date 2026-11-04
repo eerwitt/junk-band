@@ -21,8 +21,9 @@ Godot (`godot/`) owns the stage, puppets, shadows, pickup, path drawing, the rad
 
 - `subscribe(callback)` returns a subscription ID and sends an initial `state` packet. Later edits are coalesced to one notification per animation frame.
 - `command(json)` accepts schema-validated, allowlisted commands (transport, selection, performer patches, clone/add/remove/Undo, save/open/export, drawers). Unknown kinds and invalid values are rejected.
-- `frame()` returns one small JSON packet per frame: the Web Audio beat, playback state, master pulse and per-performer note envelopes from actual scheduled onsets. The bridge caches it before other nodes run.
+- `frame()` returns one small JSON packet per frame: the Web Audio beat, playback state, master pulse, per-performer note envelopes from actual scheduled onsets, and `onsets` (the age in seconds and velocity of each performer's newest sounded hit, so overlapping fast hits are still seen one by one). The bridge caches it before other nodes run.
 - `state` packets carry project metadata, selection, playing/saved status, service mode and notices, never media bytes.
+- `arrival` packets name a performer that just joined, with `kind` `new` (made in Add) or `clone` (with its `source`); `departure` packets name one being removed, sent before the state that drops it, so the stage can tell removal from unloading.
 - `texture` packets send an accepted PNG as base64 once per asset per subscription; clones share the decoded `ImageTexture`.
 - `publishLayout(json)` exposes control rectangles and FPS so browser checks can click real Godot controls. `metrics()` exposes scheduled-hit and voice counters.
 
@@ -32,7 +33,7 @@ Project changes compile one 256-step event table, committed on a bar boundary (m
 
 Buffers are cached by immutable audio ID. Each voice has attack/release, rate, pan and section gain before a master compressor. Sample speed changes pitch; there is no time stretch. WAV export runs the same compiler and mix in an `OfflineAudioContext` and encodes stereo PCM16.
 
-Godot never schedules notes from `_process()` or a Timer; note envelopes from `frame()` drive the bounce. Drawn paths use cubic Hermite interpolation closed at home, and the same evaluator gates offstage audio.
+Godot never schedules notes from `_process()` or a Timer; note envelopes and onsets from `frame()` drive each note's pop and marks, and the beat drives the groove. Drawn paths use cubic Hermite interpolation closed at home, and the same evaluator gates offstage audio.
 
 ## Persistence
 

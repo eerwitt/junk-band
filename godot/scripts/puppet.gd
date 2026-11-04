@@ -8,6 +8,18 @@ const REDUCED_CARRY_HEIGHT: float = 12.0
 const SHADOW_LIGHT: Vector2 = Vector2(0.38, -0.16)
 const DROP_GRAVITY: float = 1050.0
 const SLIDE_FLOOR_OMEGA: float = 10.5
+## How far a new character falls when it first joins the band, against an ordinary drop.
+const HERO_DROP_HEIGHT: float = 120.0
+const DEPART_TIME: float = 0.34
+## Dance styles. Each character keeps one, chosen from its id, so the band never moves as one.
+const GROOVE_SWAY: int = 0
+const GROOVE_BOB: int = 1
+const GROOVE_TWIST: int = 2
+const GROOVE_STOMP: int = 3
+
+signal departed(puppet: JunkPuppet)
+## A foot came down while walking on or off. `strength` is 0..1.
+signal stepped(point: Vector2, strength: float)
 
 var performer: Dictionary = {}
 var inspected: bool = false
@@ -78,6 +90,27 @@ var _walk_heading: float = 1.0
 var _teeter_age: float = 10.0
 ## How they travel on and off: long bounds, the waddle with a turn, or a teetering run.
 var walk_style: int = WALK_FLIP
+## 0..1, how much the whole band is dancing: rises when the music starts, slumps when it stops.
+var groove_energy: float = 0.0
+var hovered: bool = false
+var _hover_amount: float = 0.0
+var _groove_style: int = -1
+var _groove_offbeat: bool = false
+var _groove_scale: float = 1.0
+var _activity: float = 0.0
+var _hit_age: float = 10.0
+var _hit_strength: float = 0.0
+var _hit_side: float = 1.0
+var _slump_age: float = 10.0
+var _rest_yaw: float = -0.28
+var _dance_yaw: float = 0.0
+var _departure_age: float = -1.0
+var _depart_side: float = 1.0
+var hero_landing: bool = false
+## Where the character stood, as drawn, when it began to leave.
+var depart_bounds := Rect2()
+var _step_clock: float = 0.0
+var _last_step_phase: float = 0.0
 const WALK_BOUND: int = 0
 const WALK_FLIP: int = 1
 const WALK_TEETER: int = 2
@@ -121,6 +154,8 @@ func begin_pickup(point: Vector2) -> void:
 	var width: float = float(_body.texture.get_width()) if _body.texture != null else 1.0
 	_pinch_lean = clampf(-(_pinch_local.x - _body.offset.x) / width * 0.06, -0.02, 0.02)
 	_pinch_rotation = _body.rotation
+	_rest_yaw = _cardboard_yaw
+	_dance_yaw = 0.0
 	_pickup_sway = 0.0
 	_carry_position = position
 	if not _settling: _carry_velocity = Vector2.ZERO
@@ -179,14 +214,58 @@ func jolt(amount: float, delay: float) -> void:
 	_jolt_amount = clampf(amount, 0.0, 1.0)
 
 
-func arrive(reduced_motion: bool) -> void:
+func arrive(reduced_motion: bool, hero: bool = false) -> void:
 	# This is height above the actor's actual floor position, including path motion.
 	# Reuse gravity, silhouette gathering and the existing landing response.
 	_arrival_active = true
 	_slide_drop = false
-	_lift_height = 0.0 if reduced_motion else CARRY_HEIGHT * 0.85
+	_lift_height = 0.0 if reduced_motion else (HERO_DROP_HEIGHT if hero else CARRY_HEIGHT * 0.85)
 	_lift_velocity = 0.0
-	_drop_strength = 0.38
+	_drop_strength = 1.0 if hero else 0.38
+	hero_landing = hero and not reduced_motion
+
+
+## A clone hops out of the character it was copied from, and lands on its own spot.
+func arrive_from(source: Vector2, reduced_motion: bool) -> void:
+	if reduced_motion or source.distance_to(position) < 1.0:
+		arrive(reduced_motion)
+		return
+	_arrival_active = true
+	_slide_drop = false
+	_lift_height = 6.0
+	_lift_velocity = 330.0
+	_drop_strength = 0.45
+	_carry_position = source
+	_carry_velocity = Vector2.ZERO
+	_held_position = position
+	_settling = true
+	_landing_pending = false
+	position = source
+
+
+## The sound actually played. The body pops up and twists toward alternate sides.
+func note_hit(velocity: float, downbeat: bool) -> void:
+	_hit_age = 0.0
+	_hit_strength = clampf(velocity, 0.0, 1.0) * (1.0 if downbeat else 0.72)
+	_hit_side = -_hit_side
+	_activity = minf(1.0, _activity + 0.22 + velocity * 0.18)
+
+
+## The music stopped: let the breath out and settle.
+func slump() -> void:
+	_slump_age = 0.0
+
+
+## Removed from the band: crumple up, then the stage puffs it away.
+func depart() -> void:
+	depart_bounds = floor_visual_bounds()
+	_departure_age = 0.0
+	_held = false
+	_depart_side = 1.0 if hash(str(performer.get("id", ""))) % 2 == 0 else -1.0
+
+
+func departing() -> bool:
+	return _departure_age >= 0.0
 
 
 func _init() -> void:
@@ -388,9 +467,20 @@ func pose(beat_value: float, reduced_motion: bool, delta: float = 0.0, note_puls
 		_teeter_age += delta
 		if _teeter_age < 0.8:
 			turn += sin(_teeter_age * 17.0) * exp(-_teeter_age * 5.5) * 0.16 * _walk_heading
+		if walking: _track_steps(delta)
+		var groove: Vector4 = _groove(beat_value, delta, motion, walking)
+		_elevation += groove.x
+		turn += groove.y
+		squash += groove.z
+		_dance_yaw = groove.w
+		_hover_amount = move_toward(_hover_amount, 1.0 if hovered and not _held else 0.0, delta / 0.12)
+		var perk: float = smoothstep(0.0, 1.0, _hover_amount)
+		_elevation += perk * 2.0
+		squash -= perk * 0.45
 	else:
 		_slide_lean = 0.0
 		_slide_lean_velocity = 0.0
+		_dance_yaw = 0.0
 	# Falling weight pulls the cutout long for the frames before it hits.
 	var fall_stretch: float = 0.0
 	if not reduced_motion and not _held and _lift_height > 0.01 and not _slide_drop:
@@ -422,7 +512,9 @@ func pose(beat_value: float, reduced_motion: bool, delta: float = 0.0, note_puls
 	if not _held:
 		# Only the flip style makes a move of turning round. The others just set off facing the way.
 		var turn_rate: float = 10.0 if not walking or walk_style == WALK_FLIP else 50.0
-		_cardboard_yaw = target_yaw if reduced_motion else lerp_angle(_cardboard_yaw, target_yaw, 1.0 - exp(-turn_rate * delta))
+		_rest_yaw = target_yaw if reduced_motion else lerp_angle(_rest_yaw, target_yaw, 1.0 - exp(-turn_rate * delta))
+		# Dancing turns the cutout a little on its own spot, flashing the cut edge to the beat.
+		_cardboard_yaw = _rest_yaw + _dance_yaw * (1.0 - _pickup_amount)
 	if _material_id != str(performer.get("id", "")):
 		_material_id = str(performer.get("id", ""))
 		var material_seed: float = float(_material_id.hash() % 65521) / 65521.0 * 100.0
@@ -446,6 +538,19 @@ func pose(beat_value: float, reduced_motion: bool, delta: float = 0.0, note_puls
 	_body.scale *= Vector2(1.0 + load_pulse * 0.008, 1.0 - load_pulse * 0.012)
 	_body.scale *= Vector2(1.0 - fall_stretch * 0.6, 1.0 + fall_stretch)
 	_body.skew = clampf(-tension.x * 0.0002, -0.012, 0.012) * pickup
+	var crumple: float = 0.0
+	if _departure_age >= 0.0:
+		_departure_age += delta
+		var t: float = clampf(_departure_age / DEPART_TIME, 0.0, 1.0)
+		# Balled up from the edges in, with a wince, a tip and a little leap before it goes.
+		crumple = t * t * (3.0 - 2.0 * t)
+		var wince: float = sin(minf(_departure_age / 0.08, 1.0) * PI) * (1.0 - t)
+		_body.scale *= Vector2(1.0 + wince * 0.12 - crumple * 0.82, 1.0 - wince * 0.1 - crumple * 0.62)
+		_body.rotation += _depart_side * (crumple * 1.4 + sin(_departure_age * 38.0) * 0.06 * (1.0 - t))
+		_body.position.y -= sin(t * PI) * 18.0
+		if t >= 1.0:
+			_departure_age = -2.0
+			departed.emit(self)
 	if _held or _pickup_amount > 0.0:
 		# Keep the material under the fingers fixed while the rest hangs and flexes.
 		var material_transform := Transform2D(_body.rotation, _body.scale, _body.skew, Vector2.ZERO)
@@ -509,6 +614,9 @@ func pose(beat_value: float, reduced_motion: bool, delta: float = 0.0, note_puls
 		_uploaded_blur_x = blur_x
 		_uploaded_blur_y = blur_y
 	_drop_shadow.modulate.a = circle_merge * density
+	if crumple > 0.0:
+		_shadow.modulate.a *= 1.0 - crumple
+		_drop_shadow.modulate.a *= 1.0 - crumple
 	_rig.pose(self, beat_value, reduced_motion, delta, note_pulse)
 	z_index = 3600 if _held else (3000 if inspected else int(clampf(base.y + 500.0, 101.0, 2999.0)))
 	if _slide_drop and (_landing_pending or landed_this_frame):
@@ -519,6 +627,86 @@ func pose(beat_value: float, reduced_motion: bool, delta: float = 0.0, note_puls
 		# Emit only after this frame's body, grip and floor contact are current.
 		# The stage consumes parent-space coordinates, independent of its camera.
 		landed.emit(transform * _ground_foot, _drop_strength)
+
+
+## Beat-locked dancing, plus the pop of each real note. Returns elevation, turn, squash
+## and a yaw offset. Everything comes from the audio clock, so it stays on the beat.
+func _groove(beat_value: float, delta: float, motion: String, walking: bool) -> Vector4:
+	if _groove_style < 0:
+		var seed: int = absi(hash(str(performer.get("id", ""))))
+		_groove_style = seed % 4
+		_groove_offbeat = (seed / 4) % 5 == 0
+		_groove_scale = 0.85 + float((seed / 20) % 7) * 0.05
+	_activity *= exp(-0.9 * delta)
+	_hit_age += delta
+	_slump_age += delta
+	var result := Vector4.ZERO
+	if _held or _settling or _departure_age >= 0.0 or _arrival_active:
+		return result
+	# Listening characters still nod along; the ones playing dance hardest.
+	var energy: float = groove_energy * (0.45 + 0.55 * _activity) * _groove_scale * (0.5 if walking else 1.0) * presence
+	var shifted: float = beat_value + (0.5 if _groove_offbeat else 0.0)
+	var f: float = fposmod(shifted, 1.0)
+	var accent: float = 1.3 if posmod(int(floor(shifted)), 4) == 0 else 1.0
+	# Up between beats, down on the beat. The landing is quick and the hang is long.
+	var air: float = pow(sin(f * PI), 1.6)
+	var contact: float = exp(-f * 11.0) + smoothstep(0.86, 1.0, f) * 0.5
+	# Leans that arrive on the beat and hang there, swapping side every beat.
+	var swing: float = cos(shifted * PI)
+	var lean: float = signf(swing) * pow(absf(swing), 0.55)
+	var style: int = _groove_style
+	if motion == "hop": style = GROOVE_BOB
+	match style:
+		GROOVE_SWAY:
+			result.x = air * 4.0
+			result.y = lean * 0.1
+			result.z = contact * 0.9
+			result.w = lean * 0.05
+		GROOVE_BOB:
+			result.x = air * (6.5 if motion == "hop" else 5.5)
+			result.y = sin(shifted * TAU) * 0.012
+			result.z = contact * 1.7
+		GROOVE_TWIST:
+			result.x = air * 2.5
+			result.y = lean * 0.03
+			result.z = contact * 0.8
+			result.w = lean * 0.2
+		_:
+			# Stomp: rock onto one foot, then the other.
+			var foot: float = signf(sin(shifted * PI))
+			result.x = air * 5.0
+			result.y = foot * air * 0.12
+			result.z = contact * 1.4
+	result *= energy * accent
+	if _slump_age < 0.7:
+		var sigh: float = sin(minf(_slump_age / 0.14, 1.0) * PI * 0.5) * exp(-_slump_age * 4.5)
+		result.x -= sigh * 2.5
+		result.z += sigh * 2.2
+		result.y += sigh * 0.04 * _hit_side
+	if _hit_age < 0.4:
+		# Snap tall on the note, settle back with one small overshoot.
+		var rise: float = sin(minf(_hit_age / 0.045, 1.0) * PI * 0.5)
+		var pop: float = rise * exp(-_hit_age * 13.0) - 0.22 * sin(clampf((_hit_age - 0.09) / 0.2, 0.0, 1.0) * PI)
+		result.z -= pop * 2.0 * _hit_strength
+		result.y += pop * 0.05 * _hit_side * _hit_strength
+		result.w += pop * 0.14 * _hit_side * _hit_strength
+		if motion == "hop": result.x += sin(clampf(_hit_age / 0.24, 0.0, 1.0) * PI) * 9.0 * _hit_strength
+	return result
+
+
+## Footfalls while walking on or off, each style at its own pace.
+func _track_steps(delta: float) -> void:
+	var phase: float = 0.0
+	match walk_style:
+		WALK_BOUND: phase = smoothstep(0.0, 1.0, presence) * BOUNDS_PER_TRIP
+		WALK_TEETER: phase = _walk_clock * 27.0 / PI
+		_: phase = _walk_clock * 13.0 / PI
+	_step_clock += delta
+	if floor(phase) != floor(_last_step_phase) and _step_clock > 0.09:
+		_step_clock = 0.0
+		var strength: float = 1.0 if walk_style == WALK_BOUND else (0.35 if walk_style == WALK_TEETER else 0.6)
+		stepped.emit(transform * _ground_foot, strength)
+	_last_step_phase = phase
 
 
 ## 0..1 compression envelope: 40 ms slam, a short hold, release by 100 ms, second hit at 310 ms.

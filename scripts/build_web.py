@@ -134,6 +134,21 @@ def main() -> None:
     )
     if "Arrival regression passed" not in arrival_check:
         raise RuntimeError("Godot character arrival regression did not complete")
+    groove_check = run(
+        [
+            args.godot,
+            "--headless",
+            "--path",
+            "godot",
+            "--script",
+            "res://tests/groove_test.gd",
+            "--quit-after",
+            "300",
+        ],
+        environment,
+    )
+    if "Groove regression passed" not in groove_check:
+        raise RuntimeError("Godot dance and band-moment regression did not complete")
     run(
         [
             args.godot,

@@ -33,6 +33,18 @@ var _pending_arrivals: Dictionary = {}
 var _arrival_seen: Dictionary = {}
 var _impact_age: float = 10.0
 var _impact_kick: Vector2 = Vector2.ZERO
+var marks: JunkStageMarks
+var bpm: float = 112.0
+## 0..1, eased: how much the band is dancing. Follows the audio, not the button.
+var groove_energy: float = 0.0
+var _was_playing: bool = false
+var _onset_ages: Dictionary = {}
+var _leaving: Dictionary = {}
+var _section_now: int = -1
+var _last_beat: float = -1.0
+var _hovered_id: String = ""
+var _ink_in_id: String = ""
+var _ink_in_age: float = 10.0
 const FOCUS_ZOOM: float = 1.1
 const WING_CLEARANCE: float = 100.0
 const NOTE_ROW_HEIGHT: float = 40.0
@@ -52,8 +64,25 @@ var _scrub_moved: bool = false
 var _press_section: int = -1
 
 
-func queue_arrival(id: String) -> void:
-	if not _arrival_seen.has(id): _pending_arrivals[id] = true
+## `kind` is "new" for a character just made, "clone" for a copy of `source`.
+func queue_arrival(id: String, kind: String = "", source: String = "") -> void:
+	if not _arrival_seen.has(id): _pending_arrivals[id] = {"kind": kind, "source": source}
+
+
+## This one is being removed from the band, rather than unloaded with a project.
+func queue_departure(id: String) -> void:
+	_leaving[id] = true
+
+
+## Rub out a character's drawn path, before the change arrives from the browser.
+func erase_path(id: String) -> void:
+	if reduced_motion or not _puppets.has(id): return
+	for performer: Dictionary in performers:
+		if str(performer.id) != id or performer.get("path", []).is_empty(): continue
+		var knots: Array = JunkMotionMath.closed_path(performer)
+		var points := PackedVector2Array()
+		for index: int in range(97): points.append(JunkMotionMath.path_position(knots, float(index) / 96.0 * JunkLoopTiming.BEATS))
+		marks.erase(points)
 
 
 func cancel_path() -> void:
@@ -94,6 +123,8 @@ func _ready() -> void:
 	add_child(scrubber)
 	_world = Node2D.new()
 	add_child(_world)
+	marks = JunkStageMarks.new()
+	_world.add_child(marks)
 	resized.connect(queue_redraw)
 	mouse_exited.connect(_pointer_left)
 
@@ -107,6 +138,7 @@ func _set_cursor(cursor: String) -> void:
 
 
 func _pointer_left() -> void:
+	_hovered_id = ""
 	scrubber.hovered = false
 	scrubber.hover_index = -1
 	scrubber.over_band = false
@@ -117,6 +149,7 @@ func _pointer_left() -> void:
 func apply_scene(project: Dictionary, selection: String) -> void:
 	selected_id = selection
 	performers = project.get("performers", [])
+	bpm = float(project.get("bpm", bpm))
 	_apply_sections(project.get("sections", []))
 	var keep: Dictionary = {}
 	for performer: Dictionary in performers:
@@ -128,6 +161,8 @@ func apply_scene(project: Dictionary, selection: String) -> void:
 			_puppets[id] = puppet
 			_world.add_child(puppet)
 			puppet.landed.connect(_landed.bind(puppet))
+			puppet.departed.connect(_puppet_departed)
+			puppet.stepped.connect(func(point: Vector2, strength: float) -> void: if not reduced_motion: marks.step(point, strength))
 		var current: JunkPuppet = _puppets[id]
 		current.performer = performer
 		current.path_knots = JunkMotionMath.closed_path(performer)
@@ -144,16 +179,24 @@ func apply_scene(project: Dictionary, selection: String) -> void:
 				current._rig.configure(current, asset.get("rig", {}), _rig_layers)
 				current.visible = true
 				if _pending_arrivals.has(id):
+					var arrival: Dictionary = _pending_arrivals[id]
 					_pending_arrivals.erase(id)
 					_arrival_seen[id] = true
-					current.arrive(reduced_motion)
+					_arrive(current, arrival)
 				break
 	for id: String in _puppets.keys():
 		if not keep.has(id):
 			_pending_arrivals.erase(id)
 			_arrival_seen.erase(id)
-			_puppets[id].queue_free()
+			var leaving: JunkPuppet = _puppets[id]
 			_puppets.erase(id)
+			if _leaving.has(id) and not reduced_motion and leaving.visible:
+				# Still drawn while it crumples, but no longer part of the band or the input.
+				leaving.depart()
+				_jolt_neighbours(leaving.position, 0.35, leaving)
+			else:
+				leaving.queue_free()
+			_leaving.erase(id)
 	_place_wings()
 	queue_redraw()
 
@@ -343,14 +386,15 @@ func _kick_stage(point: Vector2, strength: float, puppet: JunkPuppet) -> void:
 		_impact_kick = puppet._slide_velocity.normalized() * lerpf(0.5, 1.4, strength)
 		return
 	_impact_kick = Vector2(0, lerpf(3.5, 9.0, strength))
-	for id: String in _puppets:
-		var other: JunkPuppet = _puppets[id]
-		if other == puppet: continue
-		# Measured on the floor plane, since screen Y is foreshortened.
-		var gap := other.position - point
-		var distance: float = Vector2(gap.x, gap.y / JunkLandingEffect.FLOOR_SQUASH).length()
-		if distance < 210.0:
-			other.jolt((1.0 - distance / 210.0) * strength * 1.25, distance / 1000.0)
+	if puppet != null and puppet.hero_landing:
+		# Everyone jumps for the new arrival, the wave spreading out from where it lands.
+		_impact_kick *= 1.6
+		_jolt_neighbours(point, 0.85, puppet, 2000.0)
+		for id: String in _puppets:
+			if _puppets[id] != puppet: _puppets[id].note_hit(0.9, true)
+		return
+	# Measured on the floor plane, since screen Y is foreshortened.
+	_jolt_neighbours(point, strength, puppet)
 
 
 func zoom_at(pointer: Vector2, factor: float) -> void:
@@ -385,11 +429,57 @@ func _landed(point: Vector2, strength: float, puppet: JunkPuppet = null) -> void
 	effect.strength = strength
 	effect.pixel_zoom = world_zoom()
 	effect.reduced_motion = reduced_motion
-	if puppet != null: effect.configure(puppet)
+	if puppet != null:
+		effect.configure(puppet)
+		if puppet.hero_landing:
+			effect.hero = true
+			effect.word_override = "yay!"
+			effect.strength = 1.0
 	_world.add_child(effect)
 	_landing_count += 1
 	_kick_stage(point, strength, puppet)
+	if puppet != null: puppet.hero_landing = false
 	action.emit("impact", {"strength": strength})
+
+
+func _arrive(puppet: JunkPuppet, arrival: Dictionary) -> void:
+	var kind: String = str(arrival.get("kind", ""))
+	var source: String = str(arrival.get("source", ""))
+	if kind == "clone" and _puppets.has(source) and _puppets[source] != puppet:
+		var original: JunkPuppet = _puppets[source]
+		# The original shivers as the copy peels off it.
+		original.note_hit(1.0, true)
+		original.jolt(0.7, 0.0)
+		puppet.arrive_from(original.position, reduced_motion)
+	else:
+		puppet.arrive(reduced_motion, kind == "new")
+
+
+func _puppet_departed(puppet: JunkPuppet) -> void:
+	var effect := JunkLandingEffect.new()
+	effect.position = puppet.position
+	effect.z_index = 3100
+	effect.seed_value = _landing_count
+	effect.poof = true
+	effect.word_override = "bye"
+	effect.strength = 0.6
+	effect.pixel_zoom = world_zoom()
+	effect.reduced_motion = reduced_motion
+	effect.configure(puppet)
+	effect.character_bounds = puppet.depart_bounds
+	effect.character_bounds.position -= effect.position
+	_world.add_child(effect)
+	puppet.queue_free()
+
+
+func _jolt_neighbours(point: Vector2, strength: float, source: JunkPuppet, reach: float = 210.0) -> void:
+	for id: String in _puppets:
+		var other: JunkPuppet = _puppets[id]
+		if other == source: continue
+		var gap := other.position - point
+		var distance: float = Vector2(gap.x, gap.y / JunkLandingEffect.FLOOR_SQUASH).length()
+		if distance < reach:
+			other.jolt((1.0 - distance / reach) * strength * 1.25, distance / 1000.0)
 
 
 func landing_count() -> int:
@@ -408,14 +498,68 @@ func _process(delta: float) -> void:
 	_sync_camera()
 	scrubber.pulse =bridge.master_pulse if bridge != null and not reduced_motion else 0.0
 	var current_beat: float = bridge.beat() if bridge != null else 0.0
+	var playing: bool = bridge != null and bridge.audio_playing
 	scrubber.advance(current_beat, delta)
+	marks.pixel_zoom = world_zoom()
+	# The band wakes quickly when the music starts, and winds down more slowly.
+	groove_energy = move_toward(groove_energy, 1.0 if playing and not reduced_motion else 0.0, delta / (0.45 if playing else 0.7))
+	if playing != _was_playing and not reduced_motion:
+		_band_turn(playing)
+	_was_playing = playing
+	if playing and not reduced_motion: _follow_song(current_beat)
+	_last_beat = current_beat
+	_ink_in_age += delta
+	if _ink_in_age < 1.0 or _selected_has_path(): queue_redraw()
 	for id: String in _puppets:
 		var puppet: JunkPuppet = _puppets[id]
 		puppet.inspected = id == inspected_id
+		puppet.hovered = id == _hovered_id and _drag_id.is_empty() and not draw_path
+		puppet.groove_energy = groove_energy
 		puppet.set_present(not _sits_out(id, current_beat))
 		if id == _drag_id:
 			puppet.move_pickup(_drag_point)
 		puppet.pose(current_beat, reduced_motion, delta, bridge.pulse_for(id) if bridge != null else 0.0)
+		# After posing, so the marks start from where the character is drawn this frame.
+		if bridge != null and not reduced_motion: _read_onset(id, puppet, current_beat)
+	for child: Node in _world.get_children():
+		if child is JunkPuppet and child.departing(): child.pose(current_beat, reduced_motion, delta, 0.0)
+
+
+## Starting: a wave of hops runs across the band from left to right. Stopping: they sag.
+func _band_turn(playing: bool) -> void:
+	for id: String in _puppets:
+		var puppet: JunkPuppet = _puppets[id]
+		if playing: puppet.jolt(0.6, clampf((puppet.position.x + 420.0) / 840.0, 0.0, 1.0) * 0.28)
+		else: puppet.slump()
+
+
+## Marks the song's own structure: a new section, and the loop coming back round.
+func _follow_song(current_beat: float) -> void:
+	if scrubber.dragging: return
+	var section: int = scrubber.section_at_fraction(fposmod(current_beat, JunkLoopTiming.BEATS) / JunkLoopTiming.BEATS)
+	var wrapped: bool = _last_beat >= 0.0 and current_beat + JunkLoopTiming.BEATS * 0.5 < _last_beat
+	var jumped: bool = absf(current_beat - _last_beat) > 0.5 and not wrapped
+	if section != _section_now and _section_now >= 0 and not jumped:
+		scrubber.stamp_section(section)
+	if wrapped:
+		scrubber.lap()
+		_band_turn(true)
+	_section_now = section
+
+
+## Each new note this character sounds, read from the audio clock rather than guessed.
+func _read_onset(id: String, puppet: JunkPuppet, current_beat: float) -> void:
+	var hit: Vector2 = bridge.onset_for(id)
+	var previous: float = float(_onset_ages.get(id, -1.0))
+	_onset_ages[id] = hit.x
+	if hit.x < 0.0 or hit.x > 0.12: return
+	if previous >= 0.0 and hit.x >= previous: return
+	if not puppet.visible or puppet._held or puppet.presence < 0.5: return
+	var at_beat: float = current_beat - hit.x * bpm / 60.0
+	var downbeat: bool = absf(at_beat - roundf(at_beat)) < 0.08
+	puppet.note_hit(hit.y, downbeat)
+	var bounds: Rect2 = puppet.floor_visual_bounds()
+	marks.note(id, Vector2(bounds.get_center().x, bounds.position.y), bounds.size.x * 0.5, hit.y, downbeat, bool(puppet.performer.get("tuned", false)))
 
 
 ## A character standing on the orbit line takes the pointer over the line beneath it.
@@ -498,9 +642,11 @@ func _gui_input(event: InputEvent) -> void:
 			return
 		if not draw_path:
 			var over_puppet: bool = false
+			_hovered_id = ""
 			for id: String in _puppets:
 				if _puppets[id].contains_world(_world_point(event.position)):
 					over_puppet = true
+					_hovered_id = id
 					break
 			mouse_default_cursor_shape = Control.CURSOR_DRAG if scrubber.hovered or over_puppet or scrubber.over_band else Control.CURSOR_ARROW
 			_set_cursor("grabbing" if not _drag_id.is_empty() else ("grab" if scrubber.hovered or over_puppet or scrubber.over_band else "default"))
@@ -563,6 +709,8 @@ func _gui_input(event: InputEvent) -> void:
 				if draw_path and _path_points.size() >= 2:
 					action.emit("update_performer", {"id": _drag_id, "patch": {"position": {"x": _path_home.x, "y": _path_home.y}, "path": JunkMotionMath.recorded_path(_path_points), "motion": "glide"}})
 					_puppets[_drag_id].finish_path()
+					_ink_in_id = _drag_id
+					_ink_in_age = 0.0 if not reduced_motion else 10.0
 					draw_path = false
 					mouse_default_cursor_shape = Control.CURSOR_ARROW
 				elif _moved and _sits_out(_drag_id, scrubber.beat) and _outside_ring(_drag_point):
@@ -609,6 +757,40 @@ func _draw_note_rows() -> void:
 		draw_line(Vector2(-reach, y), Vector2(reach, y), Color(0.45, 0.32, 0.18, 0.4 if root else 0.16), 2.0 if root else 1.0, true)
 
 
+func _selected_has_path() -> bool:
+	if reduced_motion: return false
+	for performer: Dictionary in performers:
+		if str(performer.id) == selected_id: return performer.get("path", []).size() > 1
+	return false
+
+
+## A route in dashes timed in half beats, which march along it with the song so the
+## direction and pace of travel can be read at a glance. A new route is inked in first.
+func _draw_route(performer: Dictionary) -> void:
+	var knots: Array = JunkMotionMath.closed_path(performer)
+	var samples: int = 256
+	var points: PackedVector2Array = []
+	for index: int in range(samples + 1):
+		points.append(JunkMotionMath.path_position(knots, float(index) / samples * JunkLoopTiming.BEATS))
+	var current: float = bridge.beat() if bridge != null else 0.0
+	var colour := Color(0.72, 0.40, 0.22, 0.55)
+	var per_beat: float = float(samples) / JunkLoopTiming.BEATS
+	var march: float = 0.0 if reduced_motion else current * 2.0
+	var dash := PackedVector2Array()
+	for index: int in range(samples + 1):
+		var on: bool = fposmod(float(index) / per_beat * 2.0 - march, 1.0) < 0.6
+		if on: dash.append(points[index])
+		if (not on or index == samples) and dash.size() > 1:
+			draw_polyline(dash, colour, 2.0, true)
+		if not on: dash.clear()
+	if str(performer.id) == _ink_in_id and _ink_in_age < 0.9:
+		var sweep: float = smoothstep(0.0, 0.55, _ink_in_age)
+		var fade: float = 1.0 - smoothstep(0.55, 0.9, _ink_in_age)
+		var reach: int = maxi(2, int(sweep * samples))
+		draw_polyline(points.slice(0, reach + 1), Color(0.62, 0.30, 0.14, 0.85 * fade), 3.2, true)
+		draw_circle(points[reach], 4.0 * fade + 1.0, Color(0.62, 0.30, 0.14, fade), true, -1, true)
+
+
 func _dragged_is_tuned() -> bool:
 	for performer: Dictionary in performers:
 		if str(performer.id) == _drag_id: return bool(performer.get("tuned", false))
@@ -627,12 +809,11 @@ func _draw() -> void:
 			continue
 		var path: Array = performer.get("path", [])
 		if path.size() > 1:
-			var points: PackedVector2Array = []
-			var knots: Array = JunkMotionMath.closed_path(performer)
-			for index: int in range(257):
-				points.append(JunkMotionMath.path_position(knots, float(index) / 256 * JunkLoopTiming.BEATS))
-			draw_polyline(points, Color(0.72, 0.40, 0.22, 0.5), 2, true)
+			_draw_route(performer)
 	if _path_points.size() > 1 and draw_path:
-		draw_polyline(_path_points, Color("b76b43"), 2, true)
+		# Soft graphite: a light wide pass under a firmer core, and the pencil's tip.
+		draw_polyline(_path_points, Color(0.42, 0.40, 0.37, 0.22), 4.5, true)
+		draw_polyline(_path_points, Color(0.33, 0.31, 0.28, 0.85), 1.8, true)
+		draw_circle(_path_points[-1], 3.2, Color("b76b43"), true, -1, true)
 	_draw_note_rows()
 	draw_set_transform(Vector2.ZERO)

@@ -58,6 +58,8 @@ uv run ruff check services scripts && uv run ruff format --check services script
 uv run python scripts/check_godot_browser.py --start-server
 ```
 
+To look at motion and effects without a browser, `uv run python scripts/preview_vfx.py --scenario dance --start 24` renders the base band against a simulated audio clock to PNG frames in `artifacts/vfx-preview/` (scenarios: dance, pause, remove, arrive, clone, menu, card, path, wrap, walk; `--metrics` prints each character's motion range). It needs a display, and uses `xvfb-run` when one is installed.
+
 `npm run check` type-checks, runs the Node core tests in `tests/` and checks formatting. `build_web.py` also runs the headless Godot regressions in `godot/tests/` before exporting. The browser check drives the real web export in Chromium and writes screenshots and a mix WAV to `artifacts/godot-browser/`. Focused browser checks: `check_add_studio.py` (Add flow, runs against the demo gateway with or without the Godot build), `check_audio_response.py` (live edits) and `check_audio_browser.py` (isolated audio engine, after `node scripts/build_audio_check.cjs`).
 
 ## More

@@ -21,7 +21,14 @@ export interface StudioState {
   notice: string;
 }
 export class StudioStore {
-  constructor(private readonly onJoin: (id: string) => void = () => {}) {}
+  constructor(
+    private readonly onJoin: (
+      id: string,
+      kind: "new" | "clone",
+      source?: string
+    ) => void = () => {},
+    private readonly onLeave: (id: string) => void = () => {}
+  ) {}
   state: StudioState = {
     project: starterProject(),
     selected: "p-0",
@@ -142,7 +149,7 @@ export class StudioStore {
         if (section.kind === "solo") section.mutedIds.push(clone.id);
     });
     this.notice("A new friend. A different rhythm.");
-    this.onJoin(clone.id);
+    this.onJoin(clone.id, "clone", p.id);
   }
   add(asset: Asset): void {
     if (this.state.project.performers.length >= 24) {
@@ -163,10 +170,13 @@ export class StudioStore {
         if (section.kind === "solo") section.mutedIds.push(performer.id);
     });
     this.notice(`${asset.label} joined the band.`);
-    this.onJoin(performer.id);
+    this.onJoin(performer.id, "new");
   }
   remove(): void {
     const id = this.state.selected;
+    // Before the edit, so the stage knows this one is leaving rather than unloaded.
+    if (this.state.project.performers.some((p) => p.id === id))
+      this.onLeave(id);
     this.edit((project) => {
       project.performers = project.performers.filter((p) => p.id !== id);
       for (const section of project.sections) {

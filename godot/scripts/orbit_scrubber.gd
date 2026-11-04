@@ -24,6 +24,9 @@ var _emphasis: float = 0.0
 var _reveal: Array[float] = []
 var _focus_amount: float = 0.0
 var _band_glow: float = 0.0
+var _stamp_index: int = -1
+var _stamp_age: float = 10.0
+var _lap_age: float = 10.0
 
 
 func set_sections(next: Array) -> void:
@@ -38,7 +41,21 @@ func advance(current_beat: float, delta: float) -> void:
 		_reveal[index] = move_toward(_reveal[index], 1.0 if index == hover_index else 0.0, delta / (0.22 if index == hover_index else 0.16))
 	_focus_amount = move_toward(_focus_amount, 1.0 if focus_index >= 0 else 0.0, delta / 0.55)
 	_band_glow = lerpf(_band_glow, 1.0 if over_band else 0.0, 1.0 - exp(-14.0 * delta))
+	_stamp_age += delta
+	_lap_age += delta
 	queue_redraw()
+
+
+## The song moved into a new section: its arc flashes and its name is stamped beside it.
+func stamp_section(index: int) -> void:
+	if index < 0 or index >= sections.size(): return
+	_stamp_index = index
+	_stamp_age = 0.0
+
+
+## The loop came back round: a highlight races the whole ring.
+func lap() -> void:
+	_lap_age = 0.0
 
 
 func reveal_amount() -> float:
@@ -201,6 +218,38 @@ func _draw_hover() -> void:
 		_curved_text(str(section.label), middle, gap + width * 0.5, font_size, Color(LABEL_INK, 0.72 * smoothstep(0.55, 1.0, amount)))
 
 
+func _draw_stamp(width: float) -> void:
+	if _stamp_index < 0 or _stamp_index >= sections.size() or _stamp_age > 1.4: return
+	var section: Dictionary = sections[_stamp_index]
+	var start: float = float(section.start)
+	var end: float = float(section.end)
+	# Inks along the section from where the cursor entered, then fades as one.
+	var sweep: float = 1.0 - exp(-_stamp_age * 9.0)
+	var fade: float = 1.0 - smoothstep(0.5, 1.2, _stamp_age)
+	_arc(start, lerpf(start, end, sweep), 0.0, width + 3.0 * fade, Color(0.72, 0.42, 0.22, 0.55 * fade))
+	# The name, stamped in the hover band's place: a pop, a hold, then gone.
+	if hover_index == _stamp_index or (focus_index >= 0 and _focus_amount > 0.5): return
+	var font_size: int = clampi(roundi(13.0 * _text_scale()), 10, 15)
+	var pop: float = 1.0 + 0.35 * exp(-_stamp_age * 14.0) * cos(_stamp_age * 24.0)
+	var shown: float = smoothstep(0.0, 0.06, _stamp_age) * (1.0 - smoothstep(0.85, 1.4, _stamp_age))
+	_curved_text(str(section.label), (start + end) * 0.5, 3.0 + _band_width() * 0.5 * pop, roundi(font_size * pop), Color(LABEL_INK, 0.7 * shown))
+
+
+func _draw_lap(width: float) -> void:
+	if _lap_age > 0.9: return
+	# A short bright comet leaves the top and runs once round, the way the cursor travels.
+	var head: float = ease(clampf(_lap_age / 0.75, 0.0, 1.0), 0.6)
+	var tail: float = maxf(0.0, head - 0.16)
+	var fade: float = 1.0 - smoothstep(0.6, 0.9, _lap_age)
+	var steps: int = 12
+	for index: int in range(steps):
+		var a: float = lerpf(tail, head, float(index) / steps)
+		var b: float = lerpf(tail, head, float(index + 1) / steps)
+		var share: float = float(index + 1) / steps
+		var points := PackedVector2Array([point_at(a), point_at((a + b) * 0.5), point_at(b)])
+		draw_polyline(points, Color(0.80, 0.52, 0.28, 0.7 * share * fade), width + 3.0 * share, true)
+
+
 func _draw() -> void:
 	_draw_focus_band()
 	_draw_hover()
@@ -231,6 +280,8 @@ func _draw() -> void:
 	progress.append(point_at(fraction))
 	if fraction > 0.0001:
 		draw_polyline(progress, Color(0.66, 0.45, 0.28, 0.30 + _emphasis * 0.18), width, true)
+	_draw_stamp(width)
+	_draw_lap(width)
 	var handle: Vector2 = point_at(fraction)
 	draw_circle(handle + Vector2(0, 1), 4.0 + _emphasis * 1.5, Color(0.30, 0.24, 0.15, 0.10), true, -1, true)
 	draw_circle(handle, 3.0 + _emphasis * 1.5, Color("ba8057"), true, -1, true)

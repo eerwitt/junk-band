@@ -29,6 +29,7 @@ var _content: HBoxContainer
 var _center: VBoxContainer
 var _last_layout_size := Vector2.ZERO
 var _metric_elapsed: float = 0.0
+var _play_pop: float = 10.0
 
 
 func _ready() -> void:
@@ -169,8 +170,9 @@ func _build() -> void:
 	_menu.delete_requested.connect(func(id: String) -> void: bridge.command("select", {"id": id}); bridge.command("remove"))
 	_menu.dismissed.connect(func() -> void: stage.inspected_id = ""; _publish_layout.call_deferred())
 	_menu.path_requested.connect(func(id: String) -> void: stage.start_path(id))
-	_menu.clear_path_requested.connect(func(id: String) -> void: bridge.command("update_performer", {"id": id, "patch": {"path": []}}))
+	_menu.clear_path_requested.connect(func(id: String) -> void: stage.erase_path(id); bridge.command("update_performer", {"id": id, "patch": {"path": []}}))
 	_menu.spotlight_changed.connect(func(id: String) -> void: bridge.command("spotlight", {"id": id} if id else {}))
+	_menu.settled.connect(func() -> void: _publish_layout.call_deferred())
 	_menu.tapped.connect(func(id: String) -> void: bridge.command("tap_note", {"id": id}))
 
 
@@ -232,7 +234,8 @@ func _selected() -> Dictionary:
 
 func _on_packet(packet: Dictionary) -> void:
 	match str(packet.get("type", "")):
-		"arrival": stage.queue_arrival(str(packet.id))
+		"arrival": stage.queue_arrival(str(packet.id), str(packet.get("kind", "")), str(packet.get("source", "")))
+		"departure": stage.queue_departure(str(packet.id))
 		"close_inspector": _menu.close()
 		"state": _apply_state(packet)
 		"texture":
@@ -243,13 +246,17 @@ func _on_packet(packet: Dictionary) -> void:
 func _apply_state(packet: Dictionary) -> void:
 	project = packet.get("project", project)
 	selection = str(packet.get("selected", selection))
+	var was_playing: bool = playing
 	playing = bool(packet.get("playing", false))
+	if playing != was_playing: _play_pop = 0.0
 	_syncing = true
 	_play.icon = PAUSE_ICON if playing else PLAY_ICON
 	_play.tooltip_text = "Pause" if playing else "Play"
 	_tempo.set_value_quiet(float(project.get("bpm", 112)))
 	_menu.set_stage_full(project.get("performers", []).size() >= MAX_PERFORMERS)
 	stage.reduced_motion = bool(packet.get("reducedMotion", false))
+	_menu.reduced_motion = stage.reduced_motion
+	_menu._holes.reduced_motion = stage.reduced_motion
 	stage.apply_scene(project, selection)
 	if _menu.visible:
 		if selection != _menu.performer_id: _menu.close()
@@ -275,6 +282,12 @@ func _process(delta: float) -> void:
 	_transport.position.y -= pulse * 1.8
 	_transport.pivot_offset = _transport.size / 2.0
 	_transport.scale = Vector2.ONE * (1.0 + pulse * 0.004)
+	# The button thumps down as it is struck and springs back with a little wobble.
+	_play_pop += delta
+	_play.pivot_offset = _play.size / 2.0
+	var thump: float = 0.0 if stage.reduced_motion else exp(-_play_pop * 9.0) * cos(_play_pop * 30.0)
+	_play.scale = Vector2(1.0 + thump * 0.07, 1.0 - thump * 0.09)
+	_play.rotation = thump * 0.05
 	if _menu.visible:
 		_menu.arrange(stage.performer_anchor(_menu.performer_id))
 	_metric_elapsed += delta
@@ -303,10 +316,11 @@ func _publish_layout() -> void:
 	for key: String in _menu.controls:
 		var control: Control = _menu.controls[key]
 		var rect: Rect2 = control.get_global_rect()
-		controls[key] = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "visible": control.is_visible_in_tree()}
+		# Still dealing out: not where it will be, so not yet reported as there.
+		controls[key] = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "visible": control.is_visible_in_tree() and _menu.is_settled()}
 	var orbit_handle: Vector2 = stage.global_position + stage.scrubber.position + stage.scrubber.point_at(0.25)
 	controls["scrub"] = {"x": orbit_handle.x - 12, "y": orbit_handle.y - 12, "w": 24, "h": 24, "visible": stage.is_visible_in_tree()}
-	bridge.publish_layout({"rigs": stage.rig_snapshot(), "viewport": {"x": size.x, "y": size.y}, "controls": controls, "inspector": _menu.visible, "loopBeats": JunkLoopTiming.BEATS, "pathDrawing": stage.draw_path, "focusSection": stage.focus_id, "hoverSection": stage.scrubber.hover_index, "sectionReveal": stage.scrubber.reveal_amount(), "sectionZoom": stage._section_zoom, "puppets": stage.puppet_snapshot(), "landingCount": stage.landing_count(), "fps": Engine.get_frames_per_second(), "stage": {"x": stage.global_position.x, "y": stage.global_position.y, "w": stage.size.x, "h": stage.size.y, "zoom": stage.world_zoom(), "originX": stage._world.position.x, "originY": stage._world.position.y, "cameraZoom": stage.camera_zoom}})
+	bridge.publish_layout({"rigs": stage.rig_snapshot(), "viewport": {"x": size.x, "y": size.y}, "controls": controls, "inspector": _menu.is_settled(), "loopBeats": JunkLoopTiming.BEATS, "pathDrawing": stage.draw_path, "focusSection": stage.focus_id, "hoverSection": stage.scrubber.hover_index, "sectionReveal": stage.scrubber.reveal_amount(), "sectionZoom": stage._section_zoom, "puppets": stage.puppet_snapshot(), "landingCount": stage.landing_count(), "fps": Engine.get_frames_per_second(), "stage": {"x": stage.global_position.x, "y": stage.global_position.y, "w": stage.size.x, "h": stage.size.y, "zoom": stage.world_zoom(), "originX": stage._world.position.x, "originY": stage._world.position.y, "cameraZoom": stage.camera_zoom}})
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

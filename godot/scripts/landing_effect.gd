@@ -18,14 +18,22 @@ const LETTERS: Dictionary = {
 	"m": [[Vector2(0, 0), Vector2(1, -7), Vector2(3, -7), Vector2(4, -1), Vector2(5, -7), Vector2(7, -6), Vector2(8, 0)]],
 	"f": [[Vector2(1, 2), Vector2(2, -8), Vector2(4, -10), Vector2(6, -9)], [Vector2(0, -5), Vector2(6, -6)]],
 	"w": [[Vector2(0, -7), Vector2(2, 0), Vector2(4, -5), Vector2(6, 0), Vector2(8, -7)]],
+	"y": [[Vector2(0, -7), Vector2(3, -1)], [Vector2(6, -7), Vector2(3, -1), Vector2(1, 3)]],
+	"a": [[Vector2(5, -6), Vector2(2, -7), Vector2(0, -4), Vector2(1, -1), Vector2(4, 0), Vector2(6, -3)], [Vector2(6, -7), Vector2(5, 0)]],
+	"e": [[Vector2(0, -3), Vector2(6, -4), Vector2(5, -7), Vector2(2, -7), Vector2(0, -4), Vector2(1, -1), Vector2(5, 0)]],
+	"i": [[Vector2(1, -7), Vector2(1, 0)], [Vector2(1, -10), Vector2(1.4, -9.4)]],
+	"n": [[Vector2(1, -7), Vector2(0, 0)], [Vector2(1, -4), Vector2(3, -7), Vector2(5, -6), Vector2(6, 0)]],
+	"!": [[Vector2(2, -10), Vector2(1, -3)], [Vector2(1, -0.6), Vector2(1.3, 0)]],
 }
+## A new character joining: bright paper confetti over the usual dust.
+const CONFETTI_TONES: Array[Color] = [Color("b86339"), Color("dce5db"), Color("e8c34f"), Color("29271f"), Color("d9563b"), Color("8fb3a0"), Color("f7f5ec")]
 const DUST_SHADER: Shader = preload("res://shaders/vfx_dust.gdshader")
 const SKID_SHADER: Shader = preload("res://shaders/vfx_skid.gdshader")
 const RIPPLE_SHADER: Shader = preload("res://shaders/vfx_ripple.gdshader")
 const INK_SHADER: Shader = preload("res://shaders/vfx_ink.gdshader")
 const MAX_TRAIL_SAMPLES: int = 48
 const MAX_PUFFS: int = 64
-const MAX_CHIPS: int = 48
+const MAX_CHIPS: int = 72
 ## Seconds between wake puffs, and the slowest skid that still kicks anything up.
 const WAKE_INTERVAL: float = 0.05
 const WAKE_MIN_SPEED: float = 30.0
@@ -37,6 +45,8 @@ const TRAIL_HOLD_TIME: float = 0.2
 const TRAIL_EARLY_START: float = 0.7
 const TRAIL_MIN_START: float = 0.15
 const WORD_TIME: float = 0.72
+const HERO_WORD_TIME: float = 1.2
+const ORANGE_INK := Color(0.62, 0.27, 0.12)
 const DENT_TIME: float = 1.25
 ## Vertical compression of circles lying on the stage floor.
 const FLOOR_SQUASH: float = 0.38
@@ -51,6 +61,11 @@ var reduced_motion: bool = false
 var sliding: bool = false
 var slide_velocity: Vector2 = Vector2.ZERO
 var character_bounds := Rect2(-35, -150, 70, 150)
+## A new member of the band: a bigger hit, confetti and a cheer instead of a thud.
+var hero: bool = false
+## Removed from the band: a puff of paper scraps where it stood, and no dent.
+var poof: bool = false
+var word_override: String = ""
 var _age: float = 0.0
 var _host: JunkPuppet
 var _trail: Array[Dictionary] = []
@@ -83,6 +98,7 @@ var _floor_ink: Node2D
 var _back_dust: Node2D
 var _front_dust: Node2D
 var _front_ink: Node2D
+var _confetti_layer: Node2D
 
 
 class Batch:
@@ -123,6 +139,8 @@ func _init() -> void:
 	_back_dust = _layer(100, DUST_SHADER, _draw_back_dust)
 	_front_dust = _layer(101, DUST_SHADER, _draw_front_dust)
 	_front_ink = _layer(101, INK_SHADER, _draw_front_ink)
+	# Thrown up over everyone's heads, so it is drawn above the band.
+	_confetti_layer = _layer(3090, INK_SHADER, _draw_confetti)
 
 
 func _layer(depth: int, shader: Shader, painter: Callable) -> Node2D:
@@ -230,14 +248,30 @@ func _prepare_fade() -> void:
 		_fade_delays[index] = arcs[index] / total * _fade_sweep
 
 
+func word() -> String:
+	return word_override if not word_override.is_empty() else WORDS[seed_value % WORDS.size()]
+
+
+static func _advance(letter: String) -> float:
+	if letter in ["m", "w"]: return 10.0
+	if letter in ["i", "!"]: return 5.0
+	return 8.0
+
+
+func _letter_scale() -> float:
+	return float(15 + seed_value % 3) / (11.0 * maxf(0.25, pixel_zoom)) * (1.55 if hero else 1.0)
+
+
 func word_origin() -> Vector2:
 	var zoom: float = maxf(0.25, pixel_zoom)
-	var letter_scale: float = float(15 + seed_value % 3) / (11.0 * zoom)
-	var word: String = WORDS[seed_value % WORDS.size()]
+	var letter_scale: float = _letter_scale()
 	var width: float = 0.0
-	for letter: String in word: width += (10.0 if letter in ["m", "w"] else 8.0) * letter_scale
+	for letter: String in word(): width += _advance(letter) * letter_scale
 	var side: float = -signf(slide_velocity.x) if sliding and absf(slide_velocity.x) > 10.0 else (1.0 if seed_value % 2 == 0 else -1.0)
 	var x: float = character_bounds.end.x + 14.0 / zoom if side > 0.0 else character_bounds.position.x - 14.0 / zoom - width
+	if hero or poof:
+		# Over the head: a cheer, or a last word where it stood.
+		return Vector2(-width * 0.5, character_bounds.position.y - 28.0 / zoom)
 	return Vector2(x, maxf(character_bounds.end.y, 0.0) + 24.0 / zoom)
 
 
@@ -261,7 +295,7 @@ func _process(delta: float) -> void:
 			_stop_age = _age
 			_fade_start = minf(_fade_start, _age + TRAIL_HOLD_TIME) if _fade_start >= 0.0 else _age + TRAIL_HOLD_TIME
 			_prepare_fade()
-	var finished: bool = _age > maxf(WORD_TIME, _end_age)
+	var finished: bool = _age > maxf(HERO_WORD_TIME if hero else WORD_TIME, _end_age)
 	if sliding:
 		finished = finished and not _tracking and not _trail.is_empty() and is_zero_approx(trail_opacity(_trail.size() - 1))
 	if finished: queue_free()
@@ -271,7 +305,7 @@ func _process(delta: float) -> void:
 func _redraw_all() -> void:
 	queue_redraw()
 	if not is_inside_tree(): return
-	for layer: Node2D in [_skid_layer, _ripple_layer, _floor_ink, _back_dust, _front_dust, _front_ink]:
+	for layer: Node2D in [_skid_layer, _ripple_layer, _floor_ink, _back_dust, _front_dust, _front_ink, _confetti_layer]:
 		layer.queue_redraw()
 
 
@@ -282,18 +316,21 @@ func _spawn_contact() -> void:
 	if _spawned: return
 	_spawned = true
 	_rng.seed = hash(seed_value * 7919 + 13)
-	_end_age = DENT_TIME if not sliding else 0.0
+	_end_age = DENT_TIME if not sliding and not poof else 0.0
 	if reduced_motion: return
 	# Contact records are born at age zero, so an effect can be sampled mid-life.
 	var sampled_age: float = _age
 	_age = 0.0
-	if sliding: _spawn_touchdown()
+	if poof: _spawn_poof()
+	elif sliding: _spawn_touchdown()
 	else: _spawn_impact()
+	if hero: _spawn_confetti()
 	_age = sampled_age
 
 
 ## How much of a landing's energy goes down into the floor rather than along it.
 func _impact_share() -> float:
+	if poof: return 0.0
 	if not sliding: return 1.0
 	return 1.0 - smoothstep(260.0, 900.0, slide_velocity.length())
 
@@ -322,6 +359,33 @@ func _spawn_impact(share: float = 1.0) -> void:
 	for index: int in range(count):
 		var angle: float = (float(index) + _rng.randf_range(-0.28, 0.28)) / count * TAU
 		_rays.append({"unit": Vector2(cos(angle), sin(angle) * FLOOR_SQUASH * 1.25), "start": _rng.randf_range(24.0, 32.0), "reach": (75.0 if index % 2 == 0 else 48.0) * (0.72 + power * 0.5), "width": _rng.randf_range(2.6, 4.4)})
+
+
+## Balled-up paper bursting into scraps: a round cloud and pieces flung up and out.
+func _spawn_poof() -> void:
+	# Where the balled-up paper ends: low, just off the floor.
+	var middle := Vector2(0, -18)
+	for index: int in range(16):
+		var angle: float = (float(index) + _rng.randf_range(-0.3, 0.3)) / 16.0 * TAU
+		var unit := Vector2(cos(angle), sin(angle) * 0.7)
+		_add_puff(middle + unit * 8.0, unit * _rng.randf_range(150.0, 280.0), 6.5, _rng.randf_range(24.0, 52.0), _rng.randf_range(10.0, 14.0), _rng.randf_range(24.0, 36.0), _rng.randf_range(0.55, 0.9), _rng.randf_range(0.6, 0.85), unit.y > 0.0)
+	_add_puff(middle, Vector2.ZERO, 6.0, 24.0, 18.0, 52.0, 0.45, 0.85, true)
+	for index: int in range(22):
+		var angle: float = _rng.randf() * TAU
+		var record_at: Vector2 = Vector2(cos(angle) * 8.0, sin(angle) * 4.0)
+		_add_chip(record_at, Vector2(cos(angle), sin(angle) * FLOOR_SQUASH) * _rng.randf_range(60.0, 180.0), _rng.randf_range(160.0, 360.0), _rng.randf_range(0.8, 1.2), 1.5)
+
+
+## Paper confetti thrown high, fluttering down and turning as it falls.
+func _spawn_confetti() -> void:
+	for index: int in range(44):
+		var angle: float = -PI * 0.5 + _rng.randf_range(-1.25, 1.25)
+		var record: Dictionary = {"at": Vector2(_rng.randf_range(-14.0, 14.0), _rng.randf_range(-4.0, 2.0)), "velocity": Vector2(cos(angle) * _rng.randf_range(260.0, 700.0), _rng.randf_range(-30.0, 30.0)), "loft": _rng.randf_range(480.0, 900.0), "life": _rng.randf_range(1.2, 1.7), "birth": _age + _rng.randf_range(0.0, 0.05), "spin": _rng.randf_range(-10.0, 10.0), "angle": _rng.randf() * TAU, "size": Vector2(_rng.randf_range(5.0, 9.0), _rng.randf_range(2.8, 4.6)), "tone": CONFETTI_TONES[_rng.randi() % CONFETTI_TONES.size()], "flutter": _rng.randf_range(4.0, 9.0)}
+		if _chips.size() < MAX_CHIPS: _chips.append(record)
+		else:
+			_chips[_chip_cursor] = record
+			_chip_cursor = (_chip_cursor + 1) % MAX_CHIPS
+		_end_age = maxf(_end_age, _age + float(record.life))
 
 
 func _spawn_touchdown() -> void:
@@ -418,8 +482,8 @@ func _add_puff(at: Vector2, velocity: Vector2, drag: float, rise: float, r0: flo
 	_end_age = maxf(_end_age, _age + life)
 
 
-func _add_chip(at: Vector2, velocity: Vector2, loft: float, life: float) -> void:
-	var record: Dictionary = {"at": at, "velocity": velocity, "loft": loft, "life": life, "birth": _age, "spin": _rng.randf_range(-16.0, 16.0), "angle": _rng.randf() * TAU, "size": Vector2(_rng.randf_range(2.2, 5.6), _rng.randf_range(1.2, 2.8)), "tone": CHIP_TONES[_rng.randi() % CHIP_TONES.size()]}
+func _add_chip(at: Vector2, velocity: Vector2, loft: float, life: float, scale: float = 1.0) -> void:
+	var record: Dictionary = {"at": at, "velocity": velocity, "loft": loft, "life": life, "birth": _age, "spin": _rng.randf_range(-16.0, 16.0), "angle": _rng.randf() * TAU, "size": Vector2(_rng.randf_range(2.2, 5.6), _rng.randf_range(1.2, 2.8)) * scale, "tone": CHIP_TONES[_rng.randi() % CHIP_TONES.size()]}
 	if _chips.size() < MAX_CHIPS: _chips.append(record)
 	else:
 		_chips[_chip_cursor] = record
@@ -569,12 +633,30 @@ func _draw_front_ink() -> void:
 		# The head stays put while the tail races in, so each line snaps shut.
 		var tail: Vector2 = (streak.tail as Vector2).lerp(streak.head, smoothstep(0.1, 1.0, life))
 		batch.stroke(tail, streak.head, _ink_width(float(streak.width)), Color(INK, (0.3 if sliding else 0.74) * (1.0 - life * life)))
+	_draw_chips(batch, false)
+	batch.flush(_front_ink)
+
+
+func _draw_confetti() -> void:
+	if not hero: return
+	var batch := Batch.new()
+	_draw_chips(batch, true)
+	batch.flush(_confetti_layer)
+
+
+func _draw_chips(batch: Batch, confetti: bool) -> void:
 	for chip: Dictionary in _chips:
+		if chip.has("flutter") != confetti: continue
 		var age: float = _age - float(chip.birth)
 		var life: float = age / float(chip.life)
 		if age < 0.0 or life >= 1.0: continue
 		var floor_point: Vector2 = chip.at + chip.velocity * (1.0 - exp(-1.8 * age)) / 1.8
 		var height: float = _chip_height(float(chip.loft), age)
+		if chip.has("flutter"):
+			# Light paper: burst up and out, caught by the air, then drifting down side to side.
+			floor_point = chip.at + (chip.velocity as Vector2) * (1.0 - exp(-3.0 * age)) / 3.0
+			height = maxf(float(chip.loft) / 3.0 * (1.0 - exp(-3.0 * age)) - 60.0 * age, 0.0)
+			floor_point.x += sin(age * float(chip.flutter)) * 10.0 * smoothstep(0.15, 0.6, age)
 		var center: Vector2 = floor_point + Vector2(0, -height)
 		# Cardboard flakes flip end over end, so their visible width changes as they tumble.
 		var angle: float = float(chip.angle) + float(chip.spin) * age
@@ -584,7 +666,6 @@ func _draw_front_ink() -> void:
 		var tone: Color = chip.tone
 		tone.a = 1.0 - smoothstep(0.72, 1.0, life)
 		batch.quad(center - along - across, center + along - across, center + along + across, center - along + across, tone)
-	batch.flush(_front_ink)
 
 
 ## Ballistic arc with two decaying floor bounces. Rests on the floor afterward.
@@ -606,17 +687,17 @@ func _ink_width(world_width: float) -> float:
 
 
 func _draw() -> void:
-	var t: float = clampf(_age / WORD_TIME, 0, 1)
+	var t: float = clampf(_age / (HERO_WORD_TIME if hero else WORD_TIME), 0, 1)
 	if t >= 1.0: return
 	var zoom: float = maxf(0.25, pixel_zoom)
 	var fade: float = 1.0 - smoothstep(0.42, 0.95, t)
-	var word: String = WORDS[seed_value % WORDS.size()]
-	var word_ink := Color(0.27, 0.15, 0.07, fade)
+	var word: String = word()
+	var word_ink := Color(0.27, 0.15, 0.07, fade) if not hero else Color(ORANGE_INK, fade)
 	var paper := Color(0.97, 0.955, 0.91, fade * 0.92)
-	var letter_scale: float = float(15 + seed_value % 3) / (11.0 * zoom)
+	var letter_scale: float = _letter_scale()
 	var anchor: Vector2 = word_origin()
 	var width: float = 0.0
-	for letter: String in word: width += (10.0 if letter in ["m", "w"] else 8.0) * letter_scale
+	for letter: String in word: width += _advance(letter) * letter_scale
 	# Stamped on: overshoots large for a beat and snaps down around its own centre.
 	var pop: float = 1.0
 	if not reduced_motion: pop = 1.0 + 0.62 * exp(-_age * 19.0) * cos(_age * 26.0)
@@ -632,5 +713,5 @@ func _draw() -> void:
 				# A paper knockout keeps the lettering legible where dust blows past it.
 				var stroke_width: float = (4.6 if pass_index == 0 else 2.0) / (zoom * letter_scale * pop)
 				draw_polyline(PackedVector2Array(stroke), paper if pass_index == 0 else word_ink, stroke_width, true)
-			cursor += (10.0 if word[index] in ["m", "w"] else 8.0) * letter_scale
+			cursor += _advance(word[index]) * letter_scale
 	draw_set_transform(Vector2.ZERO)
