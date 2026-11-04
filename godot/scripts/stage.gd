@@ -287,9 +287,7 @@ func _free_wing(side: float, seed_value: int, taken: Array[Vector2]) -> Vector2:
 
 func _rest_in_wings(id: String, spot: Vector2) -> void:
 	var puppet: JunkPuppet = _puppets[id]
-	puppet.wing_point = spot
-	puppet.set_present(false)
-	puppet.finish_path()
+	puppet.drop_offstage(spot)
 	action.emit("update_performer", {"id": id, "patch": {"wing": {"x": spot.x, "y": spot.y}}})
 
 

@@ -195,6 +195,15 @@ func end_pickup(target: Vector2 = Vector2.INF, dropped: bool = false) -> void:
 		_lift_velocity = minf(_lift_velocity, -maxf(_lift_height, 0.0) / 0.055)
 
 
+## Let go off the ring: already waiting there, so the drop lands and skids in place
+## instead of springing back on stage and walking out.
+func drop_offstage(spot: Vector2) -> void:
+	wing_point = spot
+	_presence_target = 0.0
+	presence = 0.0
+	end_pickup(spot, true)
+
+
 func finish_path() -> void:
 	_held = false
 	_path_handoff = true
@@ -382,6 +391,7 @@ func pose(beat_value: float, reduced_motion: bool, delta: float = 0.0, note_puls
 		_walk_clock += delta if walking else 0.0
 	if presence < 1.0:
 		base = wing_point.lerp(base, smoothstep(0.0, 1.0, presence))
+	var resting: Vector2 = base
 	if _held or _settling or _path_handoff:
 		var target: Vector2 = base if _path_handoff else _held_position
 		# This spring moves only across the floor. Height has its own state above.
@@ -399,7 +409,7 @@ func pose(beat_value: float, reduced_motion: bool, delta: float = 0.0, note_puls
 				landed_this_frame = true
 			if base.distance_to(target) < 0.2 and _carry_velocity.length() < 1.0 and _lift_height <= 0.01:
 				if _path_handoff: _path_handoff = false
-				elif Vector2(float(performer.position.x), float(performer.position.y)).distance_to(target) < 0.01 and performer.get("path", []).is_empty(): _settling = false
+				elif resting.distance_to(target) < 0.01 and (presence <= 0.0 or performer.get("path", []).is_empty()): _settling = false
 	position = base
 	if _arrival_active and _lift_height <= 0.01:
 		_arrival_active = false
