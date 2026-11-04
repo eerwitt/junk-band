@@ -52,6 +52,36 @@ def main() -> None:
         page.wait_for_function(
             "Object.values(JSON.parse(window.testStudio.audio.visualFrame()).pulses).some(pulse=>pulse>0.2)"
         )
+        # Drawn straight from currentTime, the beat stepped with each audio callback and showed
+        # no lag, so bounces landed before they were heard.
+        visual_clock = page.evaluate("""() => new Promise(done => {
+            const { audio, context } = window.testStudio, lags = [], rates = [];
+            let last, backwards = 0;
+            const tick = () => {
+                const now = performance.now();
+                const drawn = JSON.parse(audio.visualFrame()).beat, scheduled = audio.beat();
+                if (last && drawn < last.drawn && last.drawn - drawn < 32) backwards++;
+                // Callbacks closer together than a frame (catching up) present nothing new.
+                if (last && drawn >= last.drawn && now - last.now >= 4)
+                    rates.push((drawn - last.drawn) / (now - last.now));
+                last = { now, drawn };
+                if (scheduled >= drawn) lags.push(scheduled - drawn);
+                if (rates.length < 120) requestAnimationFrame(tick);
+                else {
+                    // Share of frames off the median rate: robust to one headless hiccup.
+                    const median = [...rates].sort((a, b) => a - b)[rates.length >> 1];
+                    const uneven = rates.filter(r => Math.abs(r - median) > median * 0.25).length;
+                    lags.sort((a, b) => a - b);
+                    done({ uneven_pct: uneven / rates.length * 100, backwards,
+                           lag_s: lags[lags.length >> 1] * 60 / audio.current.bpm,
+                           latency_s: (context.outputLatency || 0) + (context.baseLatency || 0) });
+                }
+            };
+            requestAnimationFrame(tick);
+        })""")
+        assert visual_clock["backwards"] == 0, visual_clock
+        assert visual_clock["uneven_pct"] < 10, visual_clock
+        assert 0.005 < visual_clock["lag_s"] < visual_clock["latency_s"] + 0.05, visual_clock
         page.locator("#pause").click()
         paused = page.evaluate("window.testStudio.audio.beat()")
         page.wait_for_timeout(100)
@@ -134,6 +164,7 @@ def main() -> None:
         "duration_s": duration,
         "rms": rms,
         "peak": peak,
+        "visual_clock": visual_clock,
         "browser_errors": errors,
         "adapter": "native AudioContext; Godot bridge is covered by the full studio check",
     }

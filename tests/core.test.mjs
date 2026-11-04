@@ -1,4 +1,5 @@
 import { describe, it } from "node:test";
+import { AudioEngine } from "../dist/modules/audio/engine.js";
 import assert from "node:assert/strict";
 import {
   demoProject,
@@ -517,5 +518,115 @@ describe("song arrangement", () => {
     );
     assert.equal(sectionGain(project, "p-0", 0), 0);
     assert.equal(sectionGain(project, "p-0", 18), 1);
+  });
+});
+
+describe("fluid visuals", () => {
+  /** A context whose render clock only moves once per 20 ms callback. */
+  const fakeContext = (latency) => {
+    const context = {
+      state: "running",
+      currentTime: 0,
+      baseLatency: 0,
+      outputLatency: latency,
+      stamp: { contextTime: 0, performanceTime: 0 },
+      getOutputTimestamp: () => context.stamp,
+    };
+    return context;
+  };
+  const engineAt = (context) => {
+    const engine = new AudioEngine(
+      async () => context,
+      async () => undefined
+    );
+    Object.assign(engine, {
+      context,
+      playing: true,
+      clock: [{ at: 0, beat: 0, bpm: 120 }],
+    });
+    return engine;
+  };
+  const withClock = (run) => {
+    const real = globalThis.performance;
+    let now = 1000;
+    Object.defineProperty(globalThis, "performance", {
+      value: { now: () => now },
+      configurable: true,
+    });
+    try {
+      run(
+        (ms) => (now += ms),
+        () => now
+      );
+    } finally {
+      Object.defineProperty(globalThis, "performance", {
+        value: real,
+        configurable: true,
+      });
+    }
+  };
+
+  it("moves the drawn beat every frame, behind the render clock by the output latency", () => {
+    withClock((advance, now) => {
+      const context = fakeContext(0.04);
+      const engine = engineAt(context);
+      const beats = [];
+      for (let frame = 0; frame < 60; frame++) {
+        advance(1000 / 60);
+        const rendered = Math.floor((now() - 1000) / 20) * 0.02;
+        context.currentTime = rendered + 0.04;
+        // The output stamp is refreshed per callback, like the render clock.
+        context.stamp = {
+          contextTime: rendered,
+          performanceTime: 1000 + rendered * 1000,
+        };
+        beats.push(JSON.parse(engine.visualFrame()).beat);
+      }
+      const steps = beats.slice(1).map((beat, index) => beat - beats[index]);
+      // 120 BPM at 60 fps is 1/30 beat per frame. The raw clock would alternate 0 and 0.04.
+      for (const step of steps.slice(2))
+        assert.ok(Math.abs(step - 1 / 30) < 0.002, String(step));
+      assert.ok(
+        beats.at(-1) < engine.beat(),
+        "drawn beat trails the scheduler"
+      );
+    });
+  });
+
+  it("carries a coarse render clock forward when there is no output stamp", () => {
+    withClock((advance, now) => {
+      const context = fakeContext(0.03);
+      delete context.getOutputTimestamp;
+      const engine = engineAt(context);
+      let previous = -1;
+      for (let frame = 0; frame < 30; frame++) {
+        advance(1000 / 60);
+        context.currentTime = Math.floor((now() - 1000) / 25) * 0.025;
+        const beat = JSON.parse(engine.visualFrame()).beat;
+        assert.ok(beat >= previous, "never runs backwards");
+        if (frame > 3) assert.ok(beat > previous, "moves every frame");
+        previous = beat;
+      }
+    });
+  });
+});
+
+describe("slider edits", () => {
+  it("make one Undo step per drag, while other edits stay separate", async () => {
+    globalThis.window ??= globalThis;
+    const { StudioStore } = await import("../dist/modules/browser/store.js");
+    // Autosave fails without IndexedDB; the store reports that as a notice.
+    const store = new StudioStore();
+    const id = store.state.project.performers[0].id;
+    const { gainDb: start, pan } = store.state.project.performers[0];
+    for (let value = -20; value <= -10; value++)
+      store.update(id, { gainDb: value });
+    store.update(id, { pan: pan === 0.5 ? 0.25 : 0.5 });
+    assert.equal(store.state.project.performers[0].gainDb, -10);
+    store.undo();
+    assert.equal(store.state.project.performers[0].pan, pan);
+    assert.equal(store.state.project.performers[0].gainDb, -10);
+    store.undo();
+    assert.equal(store.state.project.performers[0].gainDb, start);
   });
 });

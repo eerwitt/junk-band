@@ -50,6 +50,10 @@ var _section_zoom: float = 1.0
 var _scrub_origin: Vector2 = Vector2.ZERO
 var _scrub_moved: bool = false
 var _press_section: int = -1
+## The selected performer's drawn path, sampled once per scene change rather than every redraw.
+var _path_line := PackedVector2Array()
+var _path_line_id: String = ""
+var _path_line_stale: bool = true
 
 
 func queue_arrival(id: String) -> void:
@@ -155,6 +159,7 @@ func apply_scene(project: Dictionary, selection: String) -> void:
 			_puppets[id].queue_free()
 			_puppets.erase(id)
 	_place_wings()
+	_path_line_stale = true
 	queue_redraw()
 
 
@@ -598,6 +603,17 @@ func _gui_input(event: InputEvent) -> void:
 			queue_redraw()
 
 
+func _sample_path(id: String) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	for performer: Dictionary in performers:
+		if str(performer.id) != id or performer.get("path", []).size() <= 1: continue
+		var knots: Array = JunkMotionMath.closed_path(performer)
+		for index: int in range(257):
+			points.append(JunkMotionMath.path_position(knots, float(index) / 256 * JunkLoopTiming.BEATS))
+		break
+	return points
+
+
 ## While a tuned character is carried, the notes it can land on show across the stage.
 func _draw_note_rows() -> void:
 	if _drag_id.is_empty() or not _dragged_is_tuned(): return
@@ -622,16 +638,12 @@ func _draw() -> void:
 		var extent := Vector2(410, 250) * zoom
 		draw_texture_rect(_ground, Rect2(center - extent, extent * 2.0), false)
 	draw_set_transform(center, 0, Vector2.ONE * zoom)
-	for performer: Dictionary in performers:
-		if str(performer.id) != selected_id:
-			continue
-		var path: Array = performer.get("path", [])
-		if path.size() > 1:
-			var points: PackedVector2Array = []
-			var knots: Array = JunkMotionMath.closed_path(performer)
-			for index: int in range(257):
-				points.append(JunkMotionMath.path_position(knots, float(index) / 256 * JunkLoopTiming.BEATS))
-			draw_polyline(points, Color(0.72, 0.40, 0.22, 0.5), 2, true)
+	if _path_line_stale or _path_line_id != selected_id:
+		_path_line = _sample_path(selected_id)
+		_path_line_id = selected_id
+		_path_line_stale = false
+	if _path_line.size() > 1:
+		draw_polyline(_path_line, Color(0.72, 0.40, 0.22, 0.5), 2, true)
 	if _path_points.size() > 1 and draw_path:
 		draw_polyline(_path_points, Color("b76b43"), 2, true)
 	_draw_note_rows()

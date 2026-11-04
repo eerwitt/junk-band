@@ -28,7 +28,7 @@ uv run python scripts/build_web.py
 uv run python scripts/dev.py
 ```
 
-Open http://127.0.0.1:5173 (API docs at `/docs`). On Windows, `./scripts/setup.ps1 -Check -Start` does all of the above plus the checks. Build output goes to `dist/`; the build uses an isolated Godot profile under `.build/`.
+Open http://127.0.0.1:5173 (API docs at `/docs`). On Windows, `./scripts/setup.ps1 -Check -Start` does all of the above plus the checks. On Linux, `scripts/setup_cloud.sh` installs the packages, Godot 4.6.3 and only the two web export templates the build uses (see `scripts/install_godot.py`); with a preinstalled Chromium, pass its path to the browser checks with `--browser`. Build output goes to `dist/`; the build uses an isolated Godot profile under `.build/`.
 
 To use real models, copy `.env.example` to `.env`, set `MODEL_API_KEY` and/or Modal credentials, keep `JUNK_MODE=auto` and restart the gateway. Shell variables override `.env`. `uv run python scripts/preflight.py --offline` reports what is configured without calling any model. See [deployment](docs/deployment.md) for Modal, secrets and hosting.
 

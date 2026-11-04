@@ -42,6 +42,10 @@ const MAX_VOICES = 64;
 const SPOTLIGHT_BAND_LEVEL = 0.12;
 /** A tap this close to a hit already in the pattern would only double it. */
 const TAP_ALREADY_SOUNDING_S = 0.08;
+/** The drawn clock jumps rather than eases when it is this far from the speakers. */
+const VISUAL_SNAP_S = 0.05;
+/** Share of the drawn clock's error taken out each frame: smooth, and settled within ~20. */
+const VISUAL_EASE = 0.1;
 export class AudioEngine {
   constructor(
     private readonly getAudioContext: () => Promise<AudioContext>,
@@ -71,6 +75,9 @@ export class AudioEngine {
     velocity: number;
   }[] = [];
   private clock: { at: number; beat: number; bpm: number }[] = [];
+  /** Visual clock state: the last drawn audible time, and when `currentTime` last moved. */
+  private audible = { time: 0, frame: 0 };
+  private renderedAt = { context: -1, frame: 0 };
   playing = false;
   private playRequest = 0;
   private updateRequest = 0;
@@ -343,7 +350,7 @@ export class AudioEngine {
             at - stepSeconds(this.nextStep, snapshot.bpm, snapshot.swing);
           const beat = this.range.start / 4;
           this.clock = [
-            ...this.clock.slice(-1),
+            ...this.clock.slice(-3),
             { at, beat, bpm: snapshot.bpm },
           ];
           this.resumeContinuous(snapshot, beat, at);
@@ -385,7 +392,7 @@ export class AudioEngine {
             );
           }
           this.clock = [
-            ...this.clock.slice(-1),
+            ...this.clock.slice(-3),
             { at: oldTime, beat: this.nextStep / 4, bpm: snapshot.bpm },
           ];
         }
@@ -448,13 +455,12 @@ export class AudioEngine {
     for (const event of events) this.eventsByStep[event.step].push(event);
   }
   visualFrame(): string {
-    const beat = this.beat();
+    const heard = this.context ? this.audibleTime() : 0;
+    const beat = this.beatAt(heard);
     const pulses: Record<string, number> = {};
     if (this.context) {
       for (const hit of this.visualHits) {
-        const pulse =
-          pulseAtAge(this.context.currentTime - hit.time, hit.duration) *
-          hit.velocity;
+        const pulse = pulseAtAge(heard - hit.time, hit.duration) * hit.velocity;
         pulses[hit.id] = Math.max(pulses[hit.id] ?? 0, pulse);
       }
     }
@@ -680,17 +686,72 @@ export class AudioEngine {
         0.8
       );
   }
+  /** Where the scheduler is: the render clock, which runs ahead of what can be heard. */
   beat(): number {
+    return this.beatAt(this.context?.currentTime ?? 0);
+  }
+  private beatAt(time: number): number {
     if (!this.playing || !this.context || !this.clock.length)
       return this.cursor;
-    const segment =
-      [...this.clock]
-        .reverse()
-        .find((s) => s.at <= this.context!.currentTime) ?? this.clock[0];
+    let segment = this.clock[0];
+    for (const s of this.clock) if (s.at <= time) segment = s;
     return wrap(
-      segment.beat +
-        (Math.max(0, this.context.currentTime - segment.at) * segment.bpm) / 60,
+      segment.beat + (Math.max(0, time - segment.at) * segment.bpm) / 60,
       loopBeats
+    );
+  }
+  /**
+   * The moment of the song leaving the speakers, for drawing. `currentTime` only moves once per
+   * audio callback (often 10-40 ms) and leads the speakers by the output latency, so the stage
+   * would step and bounce early. The drawn clock runs on frame time and eases toward the output
+   * timestamp, so neither a late stamp nor a correction can make it stall or jump.
+   */
+  private audibleTime(): number {
+    const context = this.context!;
+    const now = performance.now();
+    const running = context.state === "running";
+    const target = this.measuredAudibleTime(context, now, running);
+    const predicted =
+      this.audible.time +
+      (running ? Math.max(0, now - this.audible.frame) / 1000 : 0);
+    const error = target - predicted;
+    let time =
+      Math.abs(error) > VISUAL_SNAP_S
+        ? target
+        : predicted + error * VISUAL_EASE;
+    // Never backwards, and never well past what has been rendered.
+    time = Math.min(
+      Math.max(time, this.audible.time),
+      context.currentTime + VISUAL_SNAP_S
+    );
+    this.audible = { time, frame: now };
+    return time;
+  }
+  private measuredAudibleTime(
+    context: AudioContext,
+    now: number,
+    running: boolean
+  ): number {
+    const stamp =
+      typeof context.getOutputTimestamp === "function"
+        ? context.getOutputTimestamp()
+        : undefined;
+    if (
+      running &&
+      stamp?.contextTime !== undefined &&
+      stamp.performanceTime !== undefined &&
+      stamp.performanceTime > 0
+    )
+      return (
+        stamp.contextTime +
+        Math.min(Math.max(0, now - stamp.performanceTime), 100) / 1000
+      );
+    if (context.currentTime !== this.renderedAt.context)
+      this.renderedAt = { context: context.currentTime, frame: now };
+    return (
+      this.renderedAt.context +
+      (running ? Math.min(now - this.renderedAt.frame, 50) / 1000 : 0) -
+      (context.outputLatency || context.baseLatency || 0)
     );
   }
   pause(): void {

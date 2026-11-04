@@ -241,6 +241,8 @@ func _on_packet(packet: Dictionary) -> void:
 
 
 func _apply_state(packet: Dictionary) -> void:
+	# The browser leaves the project out when only status changed (notices, saving, play).
+	var scene_changed: bool = packet.has("project") or str(packet.get("selected", selection)) != selection
 	project = packet.get("project", project)
 	selection = str(packet.get("selected", selection))
 	playing = bool(packet.get("playing", false))
@@ -250,7 +252,7 @@ func _apply_state(packet: Dictionary) -> void:
 	_tempo.set_value_quiet(float(project.get("bpm", 112)))
 	_menu.set_stage_full(project.get("performers", []).size() >= MAX_PERFORMERS)
 	stage.reduced_motion = bool(packet.get("reducedMotion", false))
-	stage.apply_scene(project, selection)
+	if scene_changed: stage.apply_scene(project, selection)
 	if _menu.visible:
 		if selection != _menu.performer_id: _menu.close()
 		else: _menu.sync(_selected())
