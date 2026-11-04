@@ -1,4 +1,3 @@
-import { gateway } from "../services/gateway";
 import { button, element, field, setBlocked } from "./dom";
 
 export type MaskTool = "paint" | "erase";
@@ -15,36 +14,27 @@ export class MaskEditor {
   readonly overlay = element("canvas", "mask-overlay");
   readonly cursor = element("span", "mask-brush");
   readonly tools = element("div", "mask-tools");
-  private note = element(
-    "p",
-    "fine mask-note",
-    "Changed. Choose Use this mask to keep it."
-  );
   tool: MaskTool = "paint";
-  /** Edits not yet turned into a cutout. */
-  dirty = false;
+  /** Counts every change, so a caller can tell whether this is still the mask it last used. */
+  revision = 0;
   private mask = element("canvas");
   private edge = element("canvas");
   private history: ImageData[] = [];
   private empty = true;
   private enabled = true;
-  private editing = false;
   private brushShare = 0.02;
   private drawing = false;
   private last?: { x: number; y: number };
   private frame?: number;
   private toolButtons = new Map<MaskTool, HTMLButtonElement>();
   private undoButton: HTMLButtonElement;
-  private clearButton: HTMLButtonElement;
-  private applyButton: HTMLButtonElement;
   private brush = element("input");
 
   constructor(
     private readonly preview: HTMLElement,
     width: number,
     height: number,
-    private readonly onChange: () => void,
-    onApply: () => void
+    private readonly onChange: () => void
   ) {
     const scale = Math.min(1, MAX_CANVAS_WIDTH / width);
     for (const canvas of [this.overlay, this.mask, this.edge]) {
@@ -76,18 +66,7 @@ export class MaskEditor {
     const size = field("Brush size", this.brush);
     size.classList.add("mask-size");
     this.undoButton = button("Undo", () => this.undo());
-    this.clearButton = button("Clear", () => this.clearStroke());
-    this.applyButton = button("Use this mask", onApply);
-    this.note.hidden = true;
-    this.note.setAttribute("role", "status");
-    this.tools.append(
-      choices,
-      size,
-      this.undoButton,
-      this.clearButton,
-      this.applyButton,
-      this.note
-    );
+    this.tools.append(choices, size, this.undoButton);
     preview.addEventListener("pointerdown", (event) => this.begin(event));
     preview.addEventListener("pointermove", (event) => this.move(event));
     preview.addEventListener("pointerup", () => this.end());
@@ -137,28 +116,6 @@ export class MaskEditor {
       this.undoButton,
       wait || (this.history.length ? "" : "Nothing to undo yet.")
     );
-    setBlocked(
-      this.clearButton,
-      wait || (this.empty ? "The mask is already empty." : "")
-    );
-    setBlocked(
-      this.applyButton,
-      wait ||
-        (this.empty
-          ? "Paint over the object first."
-          : this.dirty
-          ? ""
-          : "Paint or erase something first.")
-    );
-    this.applyButton.hidden = !this.editing;
-    this.applyButton.classList.toggle("primary", this.dirty && !this.empty);
-    this.note.hidden = !this.editing || !this.dirty || this.empty;
-  }
-
-  /** With a cutout made, painting changes it directly rather than starting a new one. */
-  setEditing(editing: boolean): void {
-    this.editing = editing;
-    this.setEnabled(this.enabled);
   }
 
   get isEmpty(): boolean {
@@ -226,43 +183,8 @@ export class MaskEditor {
     this.context.clearRect(0, 0, this.mask.width, this.mask.height);
     this.history = [];
     this.empty = true;
-    this.dirty = false;
+    this.revision++;
     this.render();
-    this.setEnabled(this.enabled);
-  }
-
-  /** Show a mask the server made. Its white pixels are the object. */
-  async load(path: string): Promise<void> {
-    const picture = await createImageBitmap(await gateway.blob(path));
-    const context = this.context;
-    context.clearRect(0, 0, this.mask.width, this.mask.height);
-    context.drawImage(picture, 0, 0, this.mask.width, this.mask.height);
-    picture.close();
-    const pixels = context.getImageData(
-      0,
-      0,
-      this.mask.width,
-      this.mask.height
-    );
-    for (let index = 0; index < pixels.data.length; index += 4) {
-      const value = pixels.data[index];
-      pixels.data[index] =
-        pixels.data[index + 1] =
-        pixels.data[index + 2] =
-          255;
-      pixels.data[index + 3] = value;
-    }
-    context.putImageData(pixels, 0, 0);
-    this.history = [];
-    this.dirty = false;
-    this.refreshEmpty();
-    this.render();
-    this.setEnabled(this.enabled);
-  }
-
-  markApplied(): void {
-    this.dirty = false;
-    this.history = [];
     this.setEnabled(this.enabled);
   }
 
@@ -287,18 +209,11 @@ export class MaskEditor {
     const previous = this.history.pop();
     if (!previous) return;
     this.context.putImageData(previous, 0, 0);
-    this.dirty = this.history.length > 0;
-    this.changed();
-  }
-
-  private clearStroke(): void {
-    this.remember();
-    this.context.clearRect(0, 0, this.mask.width, this.mask.height);
-    this.dirty = true;
     this.changed();
   }
 
   private changed(): void {
+    this.revision++;
     this.refreshEmpty();
     this.render();
     this.setEnabled(this.enabled);
@@ -374,7 +289,6 @@ export class MaskEditor {
     if (!this.drawing) return;
     this.drawing = false;
     this.last = undefined;
-    this.dirty = true;
     this.changed();
   }
 

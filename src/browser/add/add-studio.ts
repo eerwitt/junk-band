@@ -3,48 +3,67 @@ import { gateway, type Health, type Media } from "../../services/gateway";
 import { saveBlob } from "../../storage/database";
 import { button, element, field } from "../dom";
 import type { StudioStore } from "../store";
-import { ClipPhase, type KeptMoment } from "./clip-phase";
-import { FinishPhase, type FinishSource } from "./finish-phase";
-import { ObjectsPhase, type Chosen } from "./objects-phase";
+import { ClipPhase, MAX_STRETCH_S, type KeptMoment } from "./clip-phase";
+import { ObjectsPhase, type Made } from "./objects-phase";
+import { ReviewPhase, type ReviewSource } from "./review-phase";
 
-type Phase = "bring" | "moment" | "object" | "finish";
-const PHASES: readonly { id: Phase; label: string }[] = [
-  { id: "bring", label: "Bring it in" },
-  { id: "moment", label: "Pick the moment" },
+type Phase = "bring" | "moment" | "object" | "review";
+const STEPS: readonly { id: Phase; label: string }[] = [
+  { id: "moment", label: "Pick the sound" },
   { id: "object", label: "Choose the object" },
-  { id: "finish", label: "Finish" },
+  { id: "review", label: "Listen and add" },
 ];
+const RIGHTS_KEY = "junk.mediaRights";
 
-/** Add takes over the stage: bring a clip in, pick a moment, choose an object, finish. */
+function rememberedRights(): boolean {
+  try {
+    return localStorage.getItem(RIGHTS_KEY) === "yes";
+  } catch {
+    return false;
+  }
+}
+
+function rememberRights(): void {
+  try {
+    localStorage.setItem(RIGHTS_KEY, "yes");
+  } catch {
+    // Without storage it is simply asked again next time.
+  }
+}
+
+/** Add takes over the stage: trim the sound, paint the thing, then listen and add. */
 export class AddStudio {
   private root = element("aside", "add-studio");
   private steps = element("ol", "add-steps");
   private stepButtons = new Map<Phase, HTMLButtonElement>();
   private bring = element("section", "bring-phase");
   private rights = element("input");
+  private rightsField: HTMLLabelElement;
   private input = element("input");
   private status = element("p", "feedback");
   private serviceNote = element("p", "fine", "Checking available tools…");
-  private pending = element("div");
   private pendingFile?: File;
   private clip: ClipPhase;
   private objects: ObjectsPhase;
-  private finish: FinishPhase;
-  private source?: FinishSource;
+  private review: ReviewPhase;
+  private source?: ReviewSource;
+  private moment?: KeptMoment;
   private reached = new Set<Phase>(["bring"]);
   private busy = false;
   private healthEpoch = 0;
 
   constructor(store: StudioStore) {
     this.clip = new ClipPhase((moment) => this.momentKept(moment));
-    this.objects = new ObjectsPhase((chosen, window) =>
-      this.objectChosen(chosen, window)
-    );
-    this.finish = new FinishPhase(
+    this.objects = new ObjectsPhase((made) => this.made(made));
+    this.review = new ReviewPhase(
       store,
       () => !this.root.hidden,
       () => this.close(true),
       () => this.setPhase("object")
+    );
+    this.rightsField = field(
+      "I own this media or have permission to use it",
+      this.rights
     );
     this.root.hidden = true;
     this.root.tabIndex = -1;
@@ -52,7 +71,7 @@ export class AddStudio {
     this.root.setAttribute("aria-label", "Add to the band");
     const header = element("header", "add-header");
     const closeButton = button("Close", () => this.close());
-    for (const { id, label } of PHASES) {
+    for (const { id, label } of STEPS) {
       const item = element("li");
       const step = button(label, () => {
         if (this.reached.has(id)) this.setPhase(id);
@@ -73,7 +92,7 @@ export class AddStudio {
       this.bring,
       this.clip.root,
       this.objects.root,
-      this.finish.root
+      this.review.root
     );
     this.root.append(header, body);
     document.body.append(this.root);
@@ -108,6 +127,11 @@ export class AddStudio {
 
   private buildBring(): void {
     this.rights.type = "checkbox";
+    this.rights.addEventListener("change", () => {
+      if (!this.rights.checked) return;
+      rememberRights();
+      if (this.pendingFile) void this.ingest(this.pendingFile);
+    });
     this.input.type = "file";
     this.input.hidden = true;
     this.input.accept =
@@ -131,33 +155,32 @@ export class AddStudio {
     });
     this.status.setAttribute("role", "status");
     this.serviceNote.setAttribute("role", "status");
+    const demo = button(
+      "Try the demo clip",
+      () => void this.demo(),
+      "text-button"
+    );
+    demo.title =
+      "Generated artwork and synthesized audio, not a real-object recording.";
     this.bring.append(
       drop,
       this.input,
-      field("I own this media or have permission to use it", this.rights),
       element(
         "p",
         "muted",
-        "Use a clip of up to 1 minute and 200 MB, with a clearly audible object."
+        `A clip of up to 1 minute and 200 MB. You'll keep ${MAX_STRETCH_S} seconds of its sound.`
       ),
-      this.pending,
+      this.rightsField,
       this.status,
-      button(
-        "Try the generated demo clip",
-        () => void this.demo(),
-        "text-button"
-      ),
-      element(
-        "p",
-        "fine",
-        "Demo clip: generated artwork + synthesized audio. Not a real-object recording."
-      ),
+      demo,
       this.serviceNote
     );
   }
 
   show(): void {
     this.root.hidden = false;
+    this.rights.checked = rememberedRights();
+    this.rightsField.hidden = this.rights.checked;
     audio.setDucked(true);
     this.root.focus({ preventScroll: true });
     const epoch = ++this.healthEpoch;
@@ -177,21 +200,18 @@ export class AddStudio {
   }
 
   private applyService(health?: Health): void {
-    this.objects.setService(health);
-    this.finish.setService(health);
+    this.review.setService(health);
     if (!health) return;
     this.serviceNote.textContent =
       health.mode === "mock"
-        ? "Demo tools: cutouts are rectangular crops; sound targets are raw copies."
+        ? "Demo tools: cutouts are rectangular crops; sounds are raw copies."
         : [
             !health.sam
-              ? "Finding by name is unavailable; a rough box or painted mask still works."
+              ? "AI cutouts are unavailable; your painting is used."
               : "",
-            !health.image
-              ? "Painting is unavailable; you can use it as is."
-              : "",
+            !health.image ? "Painting is unavailable." : "",
             !health.audio
-              ? "Sound separation is unavailable; raw audio still works."
+              ? "Sound separation is unavailable; the original clip still works."
               : "",
           ]
             .filter(Boolean)
@@ -201,10 +221,9 @@ export class AddStudio {
   close(finished = false): void {
     this.root.hidden = true;
     this.clip.pause();
-    this.finish.pause();
+    this.review.pause();
     audio.setDucked(false);
     if (finished) {
-      this.objects.reset();
       this.reached = new Set(["bring"]);
       this.setPhase("bring");
     }
@@ -213,16 +232,17 @@ export class AddStudio {
 
   async demo(): Promise<void> {
     this.show();
-    this.rights.checked = true;
     const response = await fetch("/demo-source.mp4");
     if (!response.ok) {
       this.status.textContent = "Demo clip unavailable. Import your own media.";
       return;
     }
+    // The demo is the project's own generated clip, so no permission is needed for it.
     await this.ingest(
       new File([await response.blob()], "generated-demo.mp4", {
         type: "video/mp4",
-      })
+      }),
+      true
     );
   }
 
@@ -233,10 +253,11 @@ export class AddStudio {
     this.bring.hidden = phase !== "bring";
     this.clip.root.hidden = phase !== "moment";
     this.objects.root.hidden = phase !== "object";
-    this.finish.root.hidden = phase !== "finish";
+    this.review.root.hidden = phase !== "review";
+    this.steps.hidden = phase === "bring";
     if (phase !== "moment") this.clip.pause();
-    if (phase !== "finish") this.finish.pause();
-    for (const { id } of PHASES) {
+    if (phase !== "review") this.review.pause();
+    for (const { id } of STEPS) {
       const step = this.stepButtons.get(id)!;
       const available = this.reached.has(id);
       step.disabled = !available;
@@ -251,19 +272,14 @@ export class AddStudio {
     this.status.classList.add("error");
   }
 
-  private async ingest(file: File): Promise<void> {
+  private async ingest(file: File, ownClip = false): Promise<void> {
     if (this.busy) return;
     this.status.classList.remove("error");
-    if (!this.rights.checked) {
+    if (!ownClip && !this.rights.checked) {
       this.pendingFile = file;
       this.setPhase("bring");
-      this.pending.replaceChildren(
-        button(`Open ${file.name}`, () => {
-          if (this.pendingFile) void this.ingest(this.pendingFile);
-        })
-      );
-      this.status.textContent =
-        "Confirm your permission above, then open the dropped file.";
+      this.rightsField.hidden = false;
+      this.status.textContent = `Tick the box above to open ${file.name}.`;
       return;
     }
     if (file.size > 200 * 1024 * 1024) {
@@ -283,7 +299,6 @@ export class AddStudio {
         return;
       }
       this.pendingFile = undefined;
-      this.pending.replaceChildren();
       await saveBlob(`source-${media.id}`, file);
       this.acceptSource(file, media);
       this.status.textContent = "";
@@ -295,8 +310,7 @@ export class AddStudio {
   }
 
   private acceptSource(file: File, media: Media): void {
-    this.objects.reset();
-    this.finish.reset();
+    this.review.reset();
     if (this.source) URL.revokeObjectURL(this.source.url);
     this.source = { file, media, url: URL.createObjectURL(file) };
     this.reached = new Set(["bring", "moment"]);
@@ -307,27 +321,17 @@ export class AddStudio {
   private momentKept(moment: KeptMoment): void {
     const source = this.source;
     if (!source) return;
-    if (!source.media.width) {
-      this.reached.add("finish");
-      this.finish.open(source, undefined, moment.sound ?? "", {
-        start: moment.start,
-        end: Math.min(moment.end, moment.start + 8),
-      });
-      this.setPhase("finish");
-      return;
-    }
-    this.reached.delete("finish");
+    this.moment = moment;
+    this.reached.delete("review");
     this.objects.open(source.media, moment.start, moment.end);
     this.setPhase("object");
   }
 
-  private objectChosen(
-    chosen: Chosen,
-    window: { start: number; end: number }
-  ): void {
+  private made(made: Made): void {
     const source = this.source;
-    if (!source) return;
-    this.finish.open(source, chosen, chosen.sound, window);
-    this.setPhase("finish");
+    const moment = this.moment;
+    if (!source || !moment) return;
+    this.review.open(source, made, moment);
+    this.setPhase("review");
   }
 }

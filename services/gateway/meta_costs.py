@@ -8,10 +8,8 @@ from typing import Any
 
 SAM_IMAGE = 2.50 / 1000
 MUSE_IMAGE = 0.01
-TRANSCRIBE_PER_SECOND = 0.18 / 3600
 # Dollars per token: uncached input, cached input and output.
 SPARK = (1.25 / 1e6, 0.15 / 1e6, 4.25 / 1e6)
-WONDER = (4.00 / 1e6, 0.20 / 1e6, 20.00 / 1e6)
 # For a reply that does not say how many tokens it used. Generous for this app's short requests.
 UNKNOWN_CHAT_TOKENS = 4000
 

@@ -457,24 +457,13 @@ def main() -> None:
     parser.add_argument("--url", default="http://127.0.0.1:5173")
     parser.add_argument("--browser", type=Path)
     parser.add_argument("--output", type=Path, default=Path("artifacts/godot-browser"))
-    parser.add_argument("--inspect-only", action="store_true")
-    parser.add_argument(
-        "--elastic-only",
-        action="store_true",
-        help="Capture the actual elastic pull, reversal and landing",
-    )
-    parser.add_argument(
-        "--inspector-only",
-        action="store_true",
-        help="Check radial menu focus and settled render counters",
-    )
     parser.add_argument(
         "--autoplay-gesture-only",
         action="store_true",
         help="Check startup under browser gesture restrictions",
     )
     parser.add_argument(
-        "--start-server", action="store_true", help="Start and stop an owned mock gateway for CI"
+        "--start-server", action="store_true", help="Start and stop an owned mock gateway"
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -540,7 +529,6 @@ def main() -> None:
         context = browser.new_context(
             viewport={"width": 1440, "height": 1000},
             accept_downloads=True,
-            record_video_dir=str(args.output / "video") if args.elastic_only else None,
         )
         page = context.new_page()
         errors: list[str] = []
@@ -577,215 +565,142 @@ def main() -> None:
         (args.output / "desktop-layout.json").write_text(
             json.dumps(page.evaluate("window.JUNK.layout"), indent=2), encoding="utf-8"
         )
-        if args.elastic_only:
-            x, y, scale_x, scale_y = performer_point(page, "p-0")
-            page.mouse.move(x, y)
-            page.mouse.down()
-            page.wait_for_timeout(200)
-            page.mouse.move(x + 160 * scale_x, y - 45 * scale_y, steps=3)
-            page.wait_for_timeout(70)
-            page.screenshot(path=str(args.output / "elastic-pull.png"), full_page=True)
-            page.mouse.move(x + 110 * scale_x, y + 35 * scale_y, steps=4)
-            page.wait_for_timeout(130)
-            page.screenshot(path=str(args.output / "elastic-recoil.png"), full_page=True)
-            page.mouse.up()
-            page.wait_for_timeout(300)
-            page.screenshot(path=str(args.output / "elastic-drop.png"), full_page=True)
-            page.wait_for_function("window.JUNK.layout.landingCount >= 1")
-            assert not errors, errors
-            assert not any("SCRIPT ERROR" in message for message in messages), messages
-            context.close()
-            browser.close()
-            logger.info(
-                "Elastic browser pull, reversal and landing passed; video saved under %s",
-                args.output,
-            )
-            return
-        if args.inspector_only:
-            page.wait_for_timeout(1600)
-            closed_fps = page.evaluate("window.JUNK.metrics().fps")
-            click_performer(page, "p-0")
-            page.wait_for_timeout(1600)
-            open_fps = page.evaluate("window.JUNK.metrics().fps")
-            page.screenshot(path=str(args.output / "inspector.png"), full_page=True)
-            page.keyboard.press("Escape")
-            page.wait_for_function("!window.JUNK.layout.inspector")
-            assert not errors, errors
-            assert not any(
-                "SHADER ERROR" in message or "SCRIPT ERROR" in message for message in messages
-            ), messages
-            logger.info(
-                "Radial menu check passed: closed FPS=%s, open FPS=%s (software WebGL)",
-                closed_fps,
-                open_fps,
-            )
-            (args.output / "inspector-metrics.json").write_text(
-                json.dumps({"closed_fps": closed_fps, "open_fps": open_fps, "errors": errors}),
-                encoding="utf-8",
-            )
-            context.close()
-            browser.close()
-            return
-        if not args.inspect_only:
-            page.wait_for_function(
-                "window.JUNK.snapshot().playing && window.JUNK.metrics().hits > 4"
-            )
-            assert page.evaluate("window.JUNK.metrics().voices") > 0
-            assert page.evaluate("window.JUNK.layout.loopBeats") == 64
-            assert "song" not in page.evaluate("window.JUNK.layout.controls"), "No Song button"
-            assert page.locator('aside[aria-label="Song map"]').count() == 0, "No song drawer"
-            page.wait_for_function(
-                "Object.values(JSON.parse(window.JUNK.frame()).pulses).some(pulse=>pulse>0.2)"
-            )
-            click_control(page, "play")
-            page.wait_for_function("!window.JUNK.snapshot().playing")
-            click_control(page, "play")
-            page.wait_for_function("window.JUNK.snapshot().playing")
-            check_ring_sections(page, args.output)
-            check_tempo_dial(page, args.output)
-            bring_everyone_on(page)
-            drag_performer(page, "p-0", 35, 5, args.output)
-            page.wait_for_function("!window.JUNK.layout.inspector")
-            page.wait_for_function("window.JUNK.layout.landingCount >= 1")
-            controls = page.evaluate("window.JUNK.layout.controls")
-            assert "more" not in controls, "Duplicating now lives on the character"
-            assert controls["source"]["w"] < 60, "Add is an icon button"
-            assert (
-                0 <= controls["source"]["x"] - (controls["bpm"]["x"] + controls["bpm"]["w"]) < 40
-            ), "Add sits right beside the tempo"
-            check_rhythm_card_and_notes(page, args.output)
-            click_performer(page, "p-0")
-            click_control(page, "duplicate")
-            page.wait_for_function(
-                "n => window.JUNK.snapshot().project.performers.length === n", arg=initial_count + 1
-            )
-            page.wait_for_function("!window.JUNK.layout.inspector")
-            assert not any(
-                name.startswith(("step_", "bar_")) or name == "director"
-                for name in page.evaluate("window.JUNK.layout.controls")
-            )
-            click_performer(page, "p-0")
-            page.screenshot(path=str(args.output / "desktop-inspector.png"), full_page=True)
-            click_control(page, "gain", 0.4)
-            page.wait_for_function(
-                "window.JUNK.snapshot().project.performers.find(p=>p.id===window.JUNK.snapshot().selected).gainDb <= -15"
-            )
-            drag_performer(page, "p-0", -10, 0)
-            page.wait_for_function("!window.JUNK.layout.inspector")
-            layout = page.evaluate("window.JUNK.layout")
-            orbit = layout["stage"]
-            canvas = page.locator("#canvas").bounding_box()
-            assert canvas is not None
-            ratio_x = canvas["width"] / layout["viewport"]["x"]
-            ratio_y = canvas["height"] / layout["viewport"]["y"]
-            for index in range(7):
-                fraction = 0.25 + index / 16
-                angle = fraction * math.tau
-                page.mouse.move(
-                    canvas["x"]
-                    + (orbit["x"] + orbit["w"] / 2 - math.sin(angle) * 380 * orbit["zoom"])
-                    * ratio_x,
-                    canvas["y"]
-                    + (orbit["y"] + orbit["h"] / 2 + (34 - math.cos(angle) * 230) * orbit["zoom"])
-                    * ratio_y,
-                )
-                if index == 0:
-                    page.wait_for_function(
-                        "getComputedStyle(document.querySelector('#canvas')).cursor === 'grab'"
-                    )
-                    page.mouse.down()
-                    page.wait_for_function(
-                        "getComputedStyle(document.querySelector('#canvas')).cursor === 'grabbing'"
-                    )
-            page.mouse.up()
-            page.wait_for_function("!window.JUNK.snapshot().playing")
-            page.wait_for_function("Math.abs(window.JUNK.beat() - 40) < 0.1")
-            page.keyboard.press("ArrowRight")
-            page.wait_for_function("Math.abs(window.JUNK.beat() - 40.25) < 0.1")
-            click_performer(page, "p-0")
-            click_control(page, "draw_path")
-            page.wait_for_function("window.JUNK.layout.pathDrawing")
-            x, y, scale_x, scale_y = performer_point(page, "p-0")
-            page.mouse.move(x, y)
-            page.mouse.down()
-            for index in range(1, 25):
-                page.mouse.move(x + index * 4 * scale_x, y + math.sin(index / 5) * 40 * scale_y)
-            page.mouse.up()
-            page.wait_for_function(
-                "window.JUNK.snapshot().project.performers.find(p=>p.id==='p-0').path.length > 8 && !window.JUNK.layout.pathDrawing"
-            )
-            page.keyboard.press("End")
-            page.wait_for_function("Math.abs(window.JUNK.beat() - 63.75) < 0.1")
-            page.wait_for_timeout(450)
-            page.screenshot(path=str(args.output / "motion-return.png"), full_page=True)
-            click_performer(page, "p-0")
-            click_control(page, "clear_path")
-            page.wait_for_function(
-                "window.JUNK.snapshot().project.performers.find(p=>p.id==='p-0').path.length === 0"
-            )
-            click_control(page, "source")
-            page.locator(".add-studio").get_by_role("checkbox").check()
-            page.evaluate("""async () => {
-                const data = new DataTransfer();
-                const response = await fetch('/demo-source.mp4');
-                data.items.add(new File([await response.blob()], 'owned-tin.mp4', { type: 'video/mp4' }));
-                document.querySelector('#canvas').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
-            }""")
-            page.get_by_role("button", name="Use entire video", exact=True).click()
-            page.wait_for_function("document.querySelector('.object-stage img')?.naturalWidth > 0")
-            area = page.locator(".object-stage .source-preview").bounding_box()
-            assert area is not None
-            page.mouse.move(area["x"] + area["width"] * 0.2, area["y"] + area["height"] * 0.2)
-            page.mouse.down()
+        page.wait_for_function("window.JUNK.snapshot().playing && window.JUNK.metrics().hits > 4")
+        assert page.evaluate("window.JUNK.metrics().voices") > 0
+        assert page.evaluate("window.JUNK.layout.loopBeats") == 64
+        page.wait_for_function(
+            "Object.values(JSON.parse(window.JUNK.frame()).pulses).some(pulse=>pulse>0.2)"
+        )
+        click_control(page, "play")
+        page.wait_for_function("!window.JUNK.snapshot().playing")
+        click_control(page, "play")
+        page.wait_for_function("window.JUNK.snapshot().playing")
+        check_ring_sections(page, args.output)
+        check_tempo_dial(page, args.output)
+        bring_everyone_on(page)
+        drag_performer(page, "p-0", 35, 5, args.output)
+        page.wait_for_function("!window.JUNK.layout.inspector")
+        page.wait_for_function("window.JUNK.layout.landingCount >= 1")
+        check_rhythm_card_and_notes(page, args.output)
+        click_performer(page, "p-0")
+        click_control(page, "duplicate")
+        page.wait_for_function(
+            "n => window.JUNK.snapshot().project.performers.length === n", arg=initial_count + 1
+        )
+        page.wait_for_function("!window.JUNK.layout.inspector")
+        click_performer(page, "p-0")
+        page.screenshot(path=str(args.output / "desktop-inspector.png"), full_page=True)
+        click_control(page, "gain", 0.4)
+        page.wait_for_function(
+            "window.JUNK.snapshot().project.performers.find(p=>p.id===window.JUNK.snapshot().selected).gainDb <= -15"
+        )
+        drag_performer(page, "p-0", -10, 0)
+        page.wait_for_function("!window.JUNK.layout.inspector")
+        layout = page.evaluate("window.JUNK.layout")
+        orbit = layout["stage"]
+        canvas = page.locator("#canvas").bounding_box()
+        assert canvas is not None
+        ratio_x = canvas["width"] / layout["viewport"]["x"]
+        ratio_y = canvas["height"] / layout["viewport"]["y"]
+        for index in range(7):
+            fraction = 0.25 + index / 16
+            angle = fraction * math.tau
             page.mouse.move(
-                area["x"] + area["width"] * 0.7, area["y"] + area["height"] * 0.8, steps=6
+                canvas["x"]
+                + (orbit["x"] + orbit["w"] / 2 - math.sin(angle) * 380 * orbit["zoom"]) * ratio_x,
+                canvas["y"]
+                + (orbit["y"] + orbit["h"] / 2 + (34 - math.cos(angle) * 230) * orbit["zoom"])
+                * ratio_y,
             )
-            page.mouse.up()
-            page.get_by_role("button", name="Cut it out", exact=True).click()
-            page.locator(".object-sprites .sprite-card").first.wait_for(timeout=30000)
-            page.get_by_label("Sound to pull", exact=True).first.fill("tin clanking")
-            page.get_by_role("button", name="Use this one", exact=True).click()
-            add_to_band = page.get_by_role("button", name="Add to band", exact=True)
-            page.locator(".finish-phase audio").wait_for(timeout=30000)
-            assert page.locator(".finish-phase audio").count() == 1
-            add_to_band.click()
-            page.wait_for_function(
-                "n => window.JUNK.snapshot().project.performers.length === n", arg=initial_count + 2
-            )
-            page.wait_for_function("window.JUNK.snapshot().saved")
-            with page.expect_download() as download:
-                click_control(page, "export")
-            download.value.save_as(args.output / "godot-mix.wav")
-            with page.expect_download() as download:
-                click_control(page, "help")
-                page.get_by_role("button", name="Save project", exact=True).click()
-            download.value.save_as(args.output / "scene.junk.json")
-            page.get_by_role("complementary", name="A sampler with a pulse.").get_by_role(
-                "button", name="Close", exact=True
-            ).click()
-            assert page.get_by_role("button", name="Band direction", exact=True).count() == 0
-            page.reload(wait_until="domcontentloaded")
-            page.wait_for_function(
-                "window.JUNK?.layout?.controls?.play && document.querySelector('#loading').hidden",
-                timeout=60000,
-            )
-            assert (
-                page.evaluate("window.JUNK.snapshot().project.performers.length")
-                == initial_count + 2
-            )
-            assert any(
-                a["provenance"] == "mock candidate"
-                for a in page.evaluate("window.JUNK.snapshot().project.assets")
-            ), [a["provenance"] for a in page.evaluate("window.JUNK.snapshot().project.assets")]
-            page.wait_for_timeout(400)
-            page.screenshot(path=str(args.output / "accepted-source.png"), full_page=True)
+            if index == 0:
+                page.wait_for_function(
+                    "getComputedStyle(document.querySelector('#canvas')).cursor === 'grab'"
+                )
+                page.mouse.down()
+                page.wait_for_function(
+                    "getComputedStyle(document.querySelector('#canvas')).cursor === 'grabbing'"
+                )
+        page.mouse.up()
+        page.wait_for_function("!window.JUNK.snapshot().playing")
+        page.wait_for_function("Math.abs(window.JUNK.beat() - 40) < 0.1")
+        page.keyboard.press("ArrowRight")
+        page.wait_for_function("Math.abs(window.JUNK.beat() - 40.25) < 0.1")
+        click_performer(page, "p-0")
+        click_control(page, "draw_path")
+        page.wait_for_function("window.JUNK.layout.pathDrawing")
+        x, y, scale_x, scale_y = performer_point(page, "p-0")
+        page.mouse.move(x, y)
+        page.mouse.down()
+        for index in range(1, 25):
+            page.mouse.move(x + index * 4 * scale_x, y + math.sin(index / 5) * 40 * scale_y)
+        page.mouse.up()
+        page.wait_for_function(
+            "window.JUNK.snapshot().project.performers.find(p=>p.id==='p-0').path.length > 8 && !window.JUNK.layout.pathDrawing"
+        )
+        page.keyboard.press("End")
+        page.wait_for_function("Math.abs(window.JUNK.beat() - 63.75) < 0.1")
+        page.wait_for_timeout(450)
+        page.screenshot(path=str(args.output / "motion-return.png"), full_page=True)
+        click_performer(page, "p-0")
+        click_control(page, "clear_path")
+        page.wait_for_function(
+            "window.JUNK.snapshot().project.performers.find(p=>p.id==='p-0').path.length === 0"
+        )
+        click_control(page, "source")
+        page.locator(".add-studio").get_by_role("checkbox").check()
+        page.evaluate("""async () => {
+            const data = new DataTransfer();
+            const response = await fetch('/demo-source.mp4');
+            data.items.add(new File([await response.blob()], 'owned-tin.mp4', { type: 'video/mp4' }));
+            document.querySelector('#canvas').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
+        }""")
+        page.get_by_role("button", name="Next", exact=True).click()
+        page.wait_for_function("document.querySelector('.object-stage img')?.naturalWidth > 0")
+        area = page.locator(".object-stage .source-preview").bounding_box()
+        assert area is not None
+        page.mouse.move(area["x"] + area["width"] * 0.2, area["y"] + area["height"] * 0.2)
+        page.mouse.down()
+        page.mouse.move(area["x"] + area["width"] * 0.7, area["y"] + area["height"] * 0.8, steps=6)
+        page.mouse.up()
+        page.get_by_label("What do you want to hear?", exact=True).fill("tin clanking")
+        page.get_by_role("button", name="Make it", exact=True).click()
+        add_to_band = page.get_by_role("button", name="Add to band", exact=True)
+        page.wait_for_function(
+            "!document.querySelector('.review-phase .primary').disabled", timeout=30000
+        )
+        add_to_band.click()
+        page.wait_for_function(
+            "n => window.JUNK.snapshot().project.performers.length === n", arg=initial_count + 2
+        )
+        page.wait_for_function("window.JUNK.snapshot().saved")
+        with page.expect_download() as download:
+            click_control(page, "export")
+        download.value.save_as(args.output / "godot-mix.wav")
+        with page.expect_download() as download:
+            click_control(page, "help")
+            page.get_by_role("button", name="Save project", exact=True).click()
+        download.value.save_as(args.output / "scene.junk.json")
+        page.get_by_role("complementary", name="A sampler with a pulse.").get_by_role(
+            "button", name="Close", exact=True
+        ).click()
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function(
+            "window.JUNK?.layout?.controls?.play && document.querySelector('#loading').hidden",
+            timeout=60000,
+        )
+        assert (
+            page.evaluate("window.JUNK.snapshot().project.performers.length") == initial_count + 2
+        )
+        assert any(
+            a["provenance"] == "mock candidate"
+            for a in page.evaluate("window.JUNK.snapshot().project.assets")
+        ), [a["provenance"] for a in page.evaluate("window.JUNK.snapshot().project.assets")]
+        page.wait_for_timeout(400)
+        page.screenshot(path=str(args.output / "accepted-source.png"), full_page=True)
         metrics = page.evaluate("window.JUNK.metrics()")
         page.set_viewport_size({"width": 390, "height": 844})
         page.wait_for_timeout(700)
         mobile = page.evaluate("window.JUNK.layout")
-        assert not {"save", "open", "sounds", "undo", "stop", "inspect"}.intersection(
-            mobile["controls"]
-        )
         for name in ("play", "bpm", "export", "scrub", "source", "help"):
             rect = mobile["controls"][name]
             assert rect["x"] >= 0 and rect["x"] + rect["w"] <= mobile["viewport"]["x"] + 1, (
@@ -794,16 +709,15 @@ def main() -> None:
             )
             assert rect["y"] + rect["h"] <= mobile["viewport"]["y"] + 1, (name, rect)
         page.screenshot(path=str(args.output / "mobile.png"), full_page=True)
-        if not args.inspect_only:
-            click_performer(page, "p-0")
-            page.screenshot(path=str(args.output / "mobile-inspector.png"), full_page=True)
-            for name in ("gain", "rate", "pan", "delete_performer"):
-                rect = page.evaluate("window.JUNK.layout.controls")[name]
-                assert rect["visible"] and rect["x"] >= 0 and rect["x"] + rect["w"] <= 391, (
-                    name,
-                    rect,
-                )
-            page.keyboard.press("Escape")
+        click_performer(page, "p-0")
+        page.screenshot(path=str(args.output / "mobile-inspector.png"), full_page=True)
+        for name in ("gain", "rate", "pan", "delete_performer"):
+            rect = page.evaluate("window.JUNK.layout.controls")[name]
+            assert rect["visible"] and rect["x"] >= 0 and rect["x"] + rect["w"] <= 391, (
+                name,
+                rect,
+            )
+        page.keyboard.press("Escape")
         (args.output / "mobile-layout.json").write_text(
             json.dumps(page.evaluate("window.JUNK.layout"), indent=2), encoding="utf-8"
         )
@@ -816,73 +730,69 @@ def main() -> None:
         assert not any("SHADER ERROR" in message for message in messages), messages
         logger.info("Godot browser check passed: %s", metrics)
         context.close()
-        if not args.inspect_only:
-            portable = browser.new_context(
-                viewport={"width": 1440, "height": 1000}, accept_downloads=True
-            )
-            restored = portable.new_page()
-            restored.goto(args.url, wait_until="domcontentloaded")
-            restored.wait_for_function(
-                "window.JUNK?.layout?.controls?.play && document.querySelector('#loading').hidden",
-                timeout=60000,
-            )
-            assert restored.evaluate("window.JUNK.snapshot().project.performers.length") == 11
-            click_control(restored, "help")
-            with restored.expect_file_chooser() as chooser:
-                restored.get_by_role("button", name="Open project", exact=True).click()
-            chooser.value.set_files(args.output / "scene.junk.json")
-            restored.wait_for_function(
-                "n => window.JUNK.snapshot().project.performers.length === n", arg=initial_count + 2
-            )
-            restored.get_by_role("complementary", name="A sampler with a pulse.").get_by_role(
-                "button", name="Close", exact=True
-            ).click()
-            if not restored.evaluate("window.JUNK.snapshot().playing"):
-                click_control(restored, "play")
-            restored.wait_for_function(
-                "window.JUNK.snapshot().playing && window.JUNK.metrics().hits > 4"
-            )
+        portable = browser.new_context(
+            viewport={"width": 1440, "height": 1000}, accept_downloads=True
+        )
+        restored = portable.new_page()
+        restored.goto(args.url, wait_until="domcontentloaded")
+        restored.wait_for_function(
+            "window.JUNK?.layout?.controls?.play && document.querySelector('#loading').hidden",
+            timeout=60000,
+        )
+        assert restored.evaluate("window.JUNK.snapshot().project.performers.length") == 11
+        click_control(restored, "help")
+        with restored.expect_file_chooser() as chooser:
+            restored.get_by_role("button", name="Open project", exact=True).click()
+        chooser.value.set_files(args.output / "scene.junk.json")
+        restored.wait_for_function(
+            "n => window.JUNK.snapshot().project.performers.length === n", arg=initial_count + 2
+        )
+        restored.get_by_role("complementary", name="A sampler with a pulse.").get_by_role(
+            "button", name="Close", exact=True
+        ).click()
+        if not restored.evaluate("window.JUNK.snapshot().playing"):
             click_control(restored, "play")
-            restored.wait_for_function("!window.JUNK.snapshot().playing")
-            click_control(restored, "help")
-            restored.get_by_role("button", name="Check model catalogue").click()
-            restored.get_by_text("mock:sam-3.1", exact=False).wait_for()
-            restored.get_by_role("button", name="Remove server session media").click()
-            restored.wait_for_function(
-                "window.JUNK.snapshot().notice.includes('Server session media removed')"
-            )
-            await_close = restored.get_by_role(
-                "complementary", name="A sampler with a pulse."
-            ).get_by_role("button", name="Close")
-            await_close.click()
-            restored.route("**/api/**", lambda route: route.abort())
-            click_control(restored, "play")
-            restored.wait_for_function(
-                "window.JUNK.snapshot().playing && window.JUNK.metrics().voices > 0"
-            )
-            click_performer(restored, "p-0")
-            click_control(restored, "delete_performer")
-            restored.wait_for_function(
-                "n => window.JUNK.snapshot().project.performers.length === n && !window.JUNK.layout.inspector",
-                arg=initial_count + 1,
-            )
-            portable.close()
+        restored.wait_for_function(
+            "window.JUNK.snapshot().playing && window.JUNK.metrics().hits > 4"
+        )
+        click_control(restored, "play")
+        restored.wait_for_function("!window.JUNK.snapshot().playing")
+        click_control(restored, "help")
+        restored.get_by_role("button", name="Check model catalogue").click()
+        restored.get_by_text("mock:sam-3.1", exact=False).wait_for()
+        restored.get_by_role("button", name="Remove server session media").click()
+        restored.wait_for_function(
+            "window.JUNK.snapshot().notice.includes('Server session media removed')"
+        )
+        await_close = restored.get_by_role(
+            "complementary", name="A sampler with a pulse."
+        ).get_by_role("button", name="Close")
+        await_close.click()
+        restored.route("**/api/**", lambda route: route.abort())
+        click_control(restored, "play")
+        restored.wait_for_function(
+            "window.JUNK.snapshot().playing && window.JUNK.metrics().voices > 0"
+        )
+        click_performer(restored, "p-0")
+        click_control(restored, "delete_performer")
+        restored.wait_for_function(
+            "n => window.JUNK.snapshot().project.performers.length === n && !window.JUNK.layout.inspector",
+            arg=initial_count + 1,
+        )
+        portable.close()
         browser.close()
-    if not args.inspect_only:
-        with wave.open(str(args.output / "godot-mix.wav"), "rb") as wav:
-            assert wav.getnchannels() == 2 and wav.getsampwidth() == 2
-            duration = wav.getnframes() / wav.getframerate()
-            samples = struct.unpack(f"<{wav.getnframes() * 2}h", wav.readframes(wav.getnframes()))
-        rms = math.sqrt(sum((sample / 32768) ** 2 for sample in samples) / len(samples))
-        peak = max(abs(sample / 32768) for sample in samples)
-        assert rms > 0.005 and peak < 0.99
-        (args.output / "audio-metrics.json").write_text(
-            json.dumps({"duration_s": duration, "rms": rms, "peak": peak}, indent=2),
-            encoding="utf-8",
-        )
-        logger.info(
-            "Integrated mix WAV passed: duration=%.4f RMS=%.5f peak=%.5f", duration, rms, peak
-        )
+    with wave.open(str(args.output / "godot-mix.wav"), "rb") as wav:
+        assert wav.getnchannels() == 2 and wav.getsampwidth() == 2
+        duration = wav.getnframes() / wav.getframerate()
+        samples = struct.unpack(f"<{wav.getnframes() * 2}h", wav.readframes(wav.getnframes()))
+    rms = math.sqrt(sum((sample / 32768) ** 2 for sample in samples) / len(samples))
+    peak = max(abs(sample / 32768) for sample in samples)
+    assert rms > 0.005 and peak < 0.99
+    (args.output / "audio-metrics.json").write_text(
+        json.dumps({"duration_s": duration, "rms": rms, "peak": peak}, indent=2),
+        encoding="utf-8",
+    )
+    logger.info("Integrated mix WAV passed: duration=%.4f RMS=%.5f peak=%.5f", duration, rms, peak)
     if owned_server is not None:
         stop_owned_server()
 

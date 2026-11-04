@@ -22,12 +22,6 @@ from pydantic import ValidationError
 from services.gateway.character_jobs import CharacterJobs
 from services.gateway.config import WORKER_LIMIT_MESSAGE, WORKER_LIMIT_S, Settings
 from services.gateway.environment import load_environment
-from services.gateway.extras import (
-    Interpretation,
-    InterpretationRequest,
-    interpret,
-    transcribe,
-)
 from services.gateway.limits import (
     OUT_OF_META,
     SiteGuard,
@@ -46,23 +40,19 @@ from services.gateway.meta import (
     ModelDependencyError,
     ModelResultError,
     NoObjectMatched,
-    validate_actions,
 )
 from services.gateway.meta_costs import set_meta_ledger
 from services.gateway.models import (
     MAX_SOURCE_S,
-    Action,
     CharacterJob,
     CharacterRequest,
     Job,
     Media,
-    Proposal,
     SegmentRequest,
     Selection,
     SelectionRequest,
     SeparateRequest,
     SoundStage,
-    WonderRequest,
 )
 from services.gateway.picking import card_bounds, pick, torn_card
 from services.gateway.repository import Repository, expired, sign_session, verify_session
@@ -354,7 +344,6 @@ def create_app(
             or bool(config.meta_key)
             and MetaAdapter.segmentation_available(),
             "audio": config.mode == "mock" or (submit_job is not None and modal_problem is None),
-            "wonder": config.mode == "mock" or bool(config.meta_key),
             "image": config.mode == "live"
             and bool(config.meta_key)
             and MetaAdapter.segmentation_available(),
@@ -374,7 +363,6 @@ def create_app(
                 "models": [
                     "mock:sam-3.1",
                     "mock:sam-audio",
-                    "mock:muse-wonder-1.0",
                     "mock:muse-spark-1.3",
                 ]
             }
@@ -695,28 +683,6 @@ def create_app(
             raise HTTPException(404, "Asset expired or not present in this session")
         return FileResponse(path, media_type="image/png" if path.suffix == ".png" else "audio/wav")
 
-    @app.post("/api/wonder")
-    async def wonder(data: WonderRequest, _owner: Session) -> Proposal:
-        if config.mode == "live":
-            require_meta()
-            await guard.admit()
-            return await MetaAdapter(config.meta_key).wonder(data)
-        p = data.performers[-1]
-        proposal = Proposal(
-            explanation=f"Give {p.name} an offbeat answer and a little hop. Keep the original groove intact.",
-            actions=[
-                Action(performerId=p.id, kind="set_pattern_transform", value="offbeat_echo"),
-                Action(performerId=p.id, kind="set_motion", value="hop"),
-            ],
-            provenance="mock rule",
-            trace=[
-                "list_performers → local scene snapshot",
-                "preview_changes → deterministic rule; no AI request",
-            ],
-        )
-        validate_actions(proposal.actions, data)
-        return proposal
-
     @app.delete("/api/session")
     async def delete_session(owner: Session) -> dict[str, bool]:
         if any(s == owner for s, _ in pending) or any(s == owner for s, _ in characters.pending):
@@ -728,51 +694,6 @@ def create_app(
         shutil.rmtree(repository.folder(owner))
         flush()
         return {"deleted": True}
-
-    @app.post("/api/interpret")
-    async def interpretation(data: InterpretationRequest, _owner: Session) -> dict[str, Any]:
-        if config.mode == "live":
-            require_meta()
-            await guard.admit()
-            result = await interpret(config.meta_key, data)
-        else:
-            result = Interpretation(
-                concept=data.description.lower()[:80],
-                sound_description=data.description.lower()[:100],
-                role="texture",
-                motion="hop",
-            )
-        return {
-            **result.model_dump(),
-            "provenance": "Muse Spark" if config.mode == "live" else "mock rule",
-        }
-
-    @app.post("/api/transcribe")
-    async def speech(owner: Session, file: Annotated[UploadFile, File()]) -> dict[str, str]:
-        suffix = Path(file.filename or "command.webm").suffix.lower()
-        if suffix not in ALLOWED_EXTENSIONS:
-            raise HTTPException(415, "Use a short audio recording")
-        payload = await file.read(4 * 1024 * 1024 + 1)
-        if len(payload) > 4 * 1024 * 1024:
-            raise HTTPException(413, "Voice commands must be under 4 MB")
-        key = uuid.uuid4().hex
-        source = repository.path(owner, f"{key}-voice{suffix}")
-        source.write_bytes(payload)
-        if config.mode == "live":
-            require_meta()
-            await guard.admit()
-            text = await transcribe(
-                config.meta_key, source, repository.path(owner, f"{key}-speech.wav")
-            )
-        else:
-            text = "Give the last performer a playful offbeat and a hop."
-        flush()
-        return {
-            "text": text,
-            "provenance": "Muse Voice Transcribe"
-            if config.mode == "live"
-            else "Mock transcript · recorded speech was not recognized",
-        }
 
     return app
 

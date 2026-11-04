@@ -1,9 +1,11 @@
 import { gateway, type Media } from "../../services/gateway";
-import { button, element, setBlocked, textInput } from "../dom";
+import { button, element, setBlocked } from "../dom";
 import { SCISSOR_BLADES } from "../paper-wait";
 import { cardFibre, videoCard } from "./video-card";
 
-const MIN_STRETCH_S = 2;
+/** The kept stretch is the sound, so it stays within what sound separation accepts. */
+export const MIN_STRETCH_S = 2;
+export const MAX_STRETCH_S = 8;
 const KEY_STEP_S = 0.1;
 const DRAG_THRESHOLD_PX = 4;
 /** The film parts as the blades close, and the scissors are gone soon after. */
@@ -22,8 +24,44 @@ const clock = (seconds: number): string => {
 export interface KeptMoment {
   start: number;
   end: number;
-  /** Only for a recording with no picture, which skips choosing an object. */
-  sound?: string;
+}
+
+/** The loudest stretch of a recording, to start the handles somewhere worth hearing. */
+async function loudestStart(
+  file: File,
+  length: number
+): Promise<number | undefined> {
+  try {
+    const decoded = await new OfflineAudioContext(1, 1, 8000).decodeAudioData(
+      await file.arrayBuffer()
+    );
+    const samples = decoded.getChannelData(0);
+    const bin = Math.max(1, Math.round(decoded.sampleRate / 10));
+    const energy: number[] = [];
+    for (let at = 0; at < samples.length; at += bin) {
+      let sum = 0;
+      const stop = Math.min(samples.length, at + bin);
+      for (let index = at; index < stop; index++)
+        sum += samples[index] * samples[index];
+      energy.push(sum);
+    }
+    const width = Math.max(1, Math.round(length * 10));
+    const totals = [energy.slice(0, width).reduce((a, b) => a + b, 0)];
+    for (let at = 1; at + width <= energy.length; at++)
+      totals.push(totals[at - 1] + energy[at + width - 1] - energy[at - 1]);
+    const best = Math.max(...totals);
+    if (!(best > 0)) return undefined;
+    // Every window holding the loud part scores about the same; take the middle of that run,
+    // so the sound sits in the middle of the kept stretch rather than at one end.
+    const peak = totals.indexOf(best);
+    let first = peak;
+    let last = peak;
+    while (first > 0 && totals[first - 1] >= best * 0.98) first--;
+    while (last < totals.length - 1 && totals[last + 1] >= best * 0.98) last++;
+    return Math.round((first + last) / 2) / 10;
+  } catch {
+    return undefined;
+  }
 }
 
 function filmPiece(part: string): { root: HTMLElement; stock: HTMLElement } {
@@ -41,8 +79,8 @@ function scissors(): Element {
 }
 
 /**
- * Pick a stretch of time as if editing film: drag the ends, or slide the whole piece. Letting go
- * snips the strip. The offcuts stay behind, grey, and dragging an end back over them restores them.
+ * Pick the sound as if editing film: drag the ends, or slide the whole piece. Letting go snips the
+ * strip. The offcuts stay behind, grey, and dragging an end back over them restores them.
  */
 export class ClipPhase {
   readonly root = element("section", "clip-phase");
@@ -64,18 +102,14 @@ export class ClipPhase {
   private snipTimers: Record<Side, number[]> = { start: [], end: [] };
   private readout = element("p", "clip-readout");
   private playButton = button("Play", () => this.togglePlay());
-  private soundButton = button("Sound on", () => this.toggleSound());
-  private keepPart = button("Use this part", () => this.keep(), "primary");
-  private keepAll = button("Use entire video", () => {
-    this.start = 0;
-    this.end = this.duration;
-    this.heal("start");
-    this.heal("end");
-    this.draw();
-    this.keep();
-  });
-  private soundName = textInput("What sound is this?");
-  private soundRow = element("label", "field clip-sound");
+  private next = button("Next", () => this.keep(), "primary");
+  private hint = element(
+    "p",
+    "fine clip-hint",
+    `Drag the ends around the sound you want, ${MIN_STRETCH_S} to ${MAX_STRETCH_S} seconds.`
+  );
+  /** Replies about an older source, or after the handles moved, are ignored. */
+  private epoch = 0;
   private video?: HTMLVideoElement;
   private fallback?: HTMLImageElement;
   private fallbackTimer?: number;
@@ -97,21 +131,9 @@ export class ClipPhase {
       this.snips.start,
       this.snips.end
     );
-    this.soundRow.append(
-      element("span", "", "What sound is this?"),
-      this.soundName
-    );
-    this.soundName.addEventListener("input", () => this.draw());
-    this.soundButton.setAttribute("aria-pressed", "true");
     const actions = element("div", "phase-actions");
-    actions.append(
-      this.playButton,
-      this.soundButton,
-      this.readout,
-      this.keepAll,
-      this.keepPart
-    );
-    this.root.append(this.stage, this.strip, this.soundRow, actions);
+    actions.append(this.playButton, this.readout, this.hint, this.next);
+    this.root.append(this.stage, this.strip, actions);
     this.bindHandle(this.startHandle, "start");
     this.bindHandle(this.endHandle, "end");
     this.bindWindow();
@@ -135,16 +157,12 @@ export class ClipPhase {
     this.media = media;
     this.duration = media.duration_s;
     this.start = 0;
-    this.end = media.duration_s;
+    this.end = Math.min(media.duration_s, MAX_STRETCH_S);
     this.heal("start");
     this.heal("end");
     this.fallback = undefined;
     const hasPicture = media.width > 0;
     this.frame.replaceChildren();
-    this.soundRow.hidden = hasPicture;
-    this.keepAll.textContent = hasPicture
-      ? "Use entire video"
-      : "Use entire recording";
     this.stage.classList.toggle("no-picture", !hasPicture);
     this.strip.classList.toggle("no-picture", !hasPicture);
     if (hasPicture)
@@ -176,13 +194,21 @@ export class ClipPhase {
     video.addEventListener("error", () => this.useServerFrames());
     this.video = video;
     this.frame.append(video, cardFibre());
-    video.muted = false;
-    this.soundButton.textContent = "Sound on";
-    this.soundButton.setAttribute("aria-pressed", "true");
     setBlocked(this.playButton, "");
-    setBlocked(this.soundButton, "");
     this.showPlaying(false);
     this.draw();
+    const epoch = ++this.epoch;
+    const length = this.end - this.start;
+    if (this.duration > length)
+      void loudestStart(file, length).then((start) => {
+        if (epoch !== this.epoch || start === undefined) return;
+        this.start = Math.min(start, this.duration - length);
+        this.end = this.start + length;
+        this.seek(this.start);
+        this.draw();
+        this.snip("start");
+        this.snip("end");
+      });
   }
 
   /** Stop any sound before leaving this phase. */
@@ -202,13 +228,6 @@ export class ClipPhase {
     void video.play().catch(() => this.showPlaying(false));
   }
 
-  private toggleSound(): void {
-    if (!this.video) return;
-    this.video.muted = !this.video.muted;
-    this.soundButton.textContent = this.video.muted ? "Sound off" : "Sound on";
-    this.soundButton.setAttribute("aria-pressed", String(!this.video.muted));
-  }
-
   private showPlaying(playing: boolean): void {
     this.playButton.textContent = playing ? "Pause" : "Play";
   }
@@ -224,7 +243,6 @@ export class ClipPhase {
     const reason =
       "This browser can't play this video, but you can still cut it.";
     setBlocked(this.playButton, reason);
-    setBlocked(this.soundButton, reason);
     this.showServerFrame(this.start);
   }
 
@@ -295,21 +313,24 @@ export class ClipPhase {
   }
 
   private bindHandle(handle: HTMLElement, side: Side): void {
-    const label =
-      side === "start"
-        ? "Start of the part to keep"
-        : "End of the part to keep";
+    const label = side === "start" ? "Start of the sound" : "End of the sound";
     handle.setAttribute("role", "slider");
     handle.setAttribute("aria-label", label);
     handle.title = `${label}. Drag, or use the arrow keys.`;
     handle.tabIndex = 0;
     const apply = (seconds: number): void => {
+      this.epoch++;
       this.heal(side);
       if (side === "start")
-        this.start = Math.max(0, Math.min(seconds, this.end - MIN_STRETCH_S));
+        this.start = Math.max(
+          0,
+          this.end - MAX_STRETCH_S,
+          Math.min(seconds, this.end - MIN_STRETCH_S)
+        );
       else
         this.end = Math.min(
           this.duration,
+          this.start + MAX_STRETCH_S,
           Math.max(seconds, this.start + MIN_STRETCH_S)
         );
       this.seek(side === "start" ? this.start : this.end);
@@ -348,6 +369,7 @@ export class ClipPhase {
   /** Slide the kept piece along the film, keeping its length. */
   private slideTo(start: number): void {
     const length = this.end - this.start;
+    this.epoch++;
     this.heal("start");
     this.heal("end");
     this.start = Math.max(0, Math.min(start, this.duration - length));
@@ -359,7 +381,7 @@ export class ClipPhase {
   private bindWindow(): void {
     const area = this.window;
     area.setAttribute("role", "slider");
-    area.setAttribute("aria-label", "Part to keep");
+    area.setAttribute("aria-label", "The sound");
     area.tabIndex = 0;
     area.addEventListener("pointerdown", (event) => {
       event.stopPropagation();
@@ -463,27 +485,16 @@ export class ClipPhase {
     this.readout.textContent = `${span} · ${(this.end - this.start).toFixed(
       1
     )} s`;
-    const unnamed =
-      !this.media?.width && !this.soundName.value.trim()
-        ? "Say what the sound is first."
-        : "";
     setBlocked(
-      this.keepPart,
-      unnamed ||
-        (whole
-          ? "Drag the handles to choose a part first, or use all of it."
-          : "")
+      this.next,
+      this.duration < MIN_STRETCH_S
+        ? `This clip is shorter than ${MIN_STRETCH_S} seconds.`
+        : ""
     );
-    setBlocked(this.keepAll, unnamed);
   }
 
   private keep(): void {
     this.pause();
-    const sound = this.soundName.value.trim();
-    this.onKeep({
-      start: this.start,
-      end: this.end,
-      ...(this.media?.width ? {} : { sound }),
-    });
+    this.onKeep({ start: this.start, end: this.end });
   }
 }

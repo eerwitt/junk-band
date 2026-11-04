@@ -135,29 +135,3 @@ class CharacterJob(StrictModel):
     provenance: str = "Meta Muse Image + SAM 3.1"
     rig: CharacterRigAsset | None = None
     queue_position: int = 0
-
-
-class PerformerSummary(StrictModel):
-    id: str = Field(max_length=100)
-    name: str = Field(max_length=80)
-    steps: list[Annotated[int, Field(ge=0, le=255)]] = Field(max_length=256)
-    motion: Literal["still", "hop", "dance", "roll", "glide"]
-    gainDb: float = Field(ge=-36, le=0)
-
-
-class WonderRequest(StrictModel):
-    instruction: str = Field(min_length=1, max_length=500)
-    performers: list[PerformerSummary] = Field(min_length=1, max_length=24)
-
-
-class Action(StrictModel):
-    performerId: str
-    kind: Literal["set_motion", "set_pattern_transform", "set_gain_db"]
-    value: str | float
-
-
-class Proposal(StrictModel):
-    explanation: str
-    actions: list[Action] = Field(min_length=1, max_length=5)
-    provenance: Literal["mock rule", "Muse Wonder"]
-    trace: list[str]

@@ -117,23 +117,6 @@ def test_rejects_unsafe_windows_and_sources(client: TestClient) -> None:
     assert client.get("/api/assets/1234-secret.json").status_code == 422
 
 
-def test_wonder_returns_inspectable_allowlisted_actions(client: TestClient) -> None:
-    response = client.post(
-        "/api/wonder",
-        json={
-            "instruction": "make it playful",
-            "performers": [
-                {"id": "p-1", "name": "Tin", "steps": [0, 4], "motion": "dance", "gainDb": -12}
-            ],
-        },
-    )
-    assert response.status_code == 200, response.text
-    proposal = response.json()
-    assert proposal["provenance"] == "mock rule"
-    assert len(proposal["trace"]) == 2
-    assert all(action["performerId"] == "p-1" for action in proposal["actions"])
-
-
 def test_session_signature_and_path_boundaries(tmp_path: Path) -> None:
     identifier = "a" * 32
     cookie = sign_session(identifier, "secret")
@@ -147,16 +130,7 @@ def test_session_signature_and_path_boundaries(tmp_path: Path) -> None:
         repository.folder("../escape")
 
 
-def test_optional_model_endpoints_are_wired_and_honest(client: TestClient) -> None:
-    result = client.post("/api/interpret", json={"description": "a glass bottle ringing"})
-    assert result.status_code == 200, result.text
-    assert result.json()["provenance"] == "mock rule"
-    assert result.json()["role"] == "texture"
-    voice = client.post(
-        "/api/transcribe", files={"file": ("command.wav", recording(), "audio/wav")}
-    )
-    assert voice.status_code == 200
-    assert "not recognized" in voice.json()["provenance"]
+def test_model_catalogue_is_labelled_mock(client: TestClient) -> None:
     assert "mock:sam-3.1" in client.get("/api/models").json()["models"]
 
 

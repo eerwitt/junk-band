@@ -1,113 +1,84 @@
-# Secure-shell deployment
+# Deployment
 
-Run provider setup from your normal shell after reviewing the source. The application now uses environment-selected providers; live inference still needs account access and a deployed worker.
+Run provider setup from your own shell after reviewing the source. Never paste tokens into browser forms or commit them; only `JUNK_API_BASE` reaches the browser build.
 
-## Accounts and secrets
+## Accounts and local setup
 
-Accept the SAM Audio checkpoint gate and license on Hugging Face. Its PE-AV and other research dependencies may require additional access; inspect the first remote build's errors. Have Modal billing enabled and Meta Model API models enabled. Do not paste tokens into browser forms, commit them, or put them in `VITE_*` variables.
+You need Modal with billing enabled, Meta Model API access to `sam-3.1`, `muse-image-1.0` (or your `META_IMAGE_MODEL`) and `muse-spark-1.3`, and an accepted Hugging Face gate for the SAM Audio checkpoint.
 
-Configure `MODEL_API_KEY` and `HF_TOKEN` in the secure shell, then run:
-
-```powershell
+```bash
 uv sync --extra dev
-uv run python scripts/preflight.py
+```
+
+```bash
 uv run modal setup
 ```
 
-For local development, copy `.env.example` to `.env` and leave `JUNK_MODE=auto`. `MODEL_API_KEY` selects live Meta SAM/Muse Image/description requests. `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` select the deployed Modal separator; alternatively set `JUNK_MODAL_ENABLED=true` to use an existing Modal CLI login. The app and volume names default to `junk-living-sampler` and `junk-session-media`. The local bridge uploads source media plus its metadata into the volume before calling `Separator.separate`, then downloads and validates both WAVs. It does not run GPU models locally. This follows Modal's [deployed class invocation](https://modal.com/docs/guide/trigger-deployed-functions) and [volume transfer](https://modal.com/docs/guide/volumes) interfaces.
+Copy `.env.example` to `.env` and keep `JUNK_MODE=auto`:
 
-Do not leave `JUNK_MODE=mock` while credentials are set: startup rejects that conflicting configuration. Provider failures never switch back to mock output. The synthesized starter band remains playable without an account. For local loopback origins, a persistent session secret is generated under the ignored data directory; hosted live mode requires your explicit secret and HTTPS origin.
+- `MODEL_API_KEY` enables Meta SAM, Muse Image and Muse Spark. `meta-sam-parser` must be installed in the server interpreter.
+- `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` (or `JUNK_MODAL_ENABLED=true` with an existing CLI login) let a local gateway call the deployed separator. App and volume names default to `junk-living-sampler` and `junk-session-media`.
+- `JUNK_MODE=mock` with credentials set is rejected at startup. Provider failures never switch back to mock output.
+- On loopback origins a session secret is generated under the data directory; hosted live mode needs an explicit `JUNK_API_SESSION_SECRET` and an HTTPS origin.
 
-Check setup without model calls: `uv run python scripts/preflight.py --offline`. Check Meta account model access without generating an image: `uv run python scripts/preflight.py --meta-only`. Required Meta models are `sam-3.1`, `muse-image-1.0` (or your `META_IMAGE_MODEL`) and `muse-spark-1.3`. `meta-sam-parser` must be installed in the actual server interpreter, even if the API key is present. Health reports configuration and installed adapters; it does not establish model entitlement or output quality. With the local bridge, it also checks (at most every 30 seconds) that the Modal app and volume exist and the token is accepted: `audio` turns false and `configuration.modal_problem` says why. An inconclusive check, such as a network failure, leaves `audio` true because it says nothing about the deployment. The gateway labels a job `SAM Audio` only when the worker's metrics report a `facebook/sam-audio*` model, and otherwise discards its output. This catches a wrong app deployed under the configured name; it is a self-report, not proof of inference.
+Check setup without model calls with `uv run python scripts/preflight.py --offline`, or check Meta model access without generating an image with `--meta-only`. `GET /api/health` reports configured adapters; with the local Modal bridge it also checks (at most every 30 s) that the app and volume exist, reporting any problem in `configuration.modal_problem`. Health is configuration, not proof of entitlement or quality. The gateway labels a job `SAM Audio` only when the worker reports a `facebook/sam-audio*` model.
 
-The SAM adapter checks the final stream outcome, rejects parser errors, resolves cumulative masks to their latest revision and uses the explicit object ID for a box prompt. A concept that matches multiple objects requires a tighter selection instead of choosing an arbitrary result. Bounds are half-open source-pixel coordinates; integral float values are converted before placing full-canvas limb masks. Image EXIF orientation is applied before segmentation so photo previews and mask coordinates agree. These rules follow the official [SAM protocol](https://github.com/meta-models/meta-sam/blob/main/protocol/sam3.md) and [Python parser contract](https://github.com/meta-models/meta-sam/blob/main/python/README.md). Contract fixtures test completed/incomplete streams, revisions, identity, cleanup, cancellation and oriented photos; they do not establish live parser/model behavior.
-
-`POST /api/selections` takes a rough box on a frame. Muse Spark names what is in it, SAM searches for that name and the match overlapping the box wins, with SAM's own reading of the box as the fallback: one description and one or two SAM requests per selection, cached per box. It also saves the as-is look: only the selected object, on a torn scrap of white paper. A box with no match still gives a usable rough selection, labelled as one. Spark was chosen after testing: `muse-wonder-1.0` took up to 78 s or timed out on images and misnamed a drum as sandy ground, and SAM from a loose box alone cut out the ground. `GET /api/media/{id}/filmstrip` returns the frames for scrubbing.
-
-The character route is `POST /api/characters` after `POST /api/segment`, followed by polling `GET /api/characters/{id}`. It sends the original cutout to Meta's [Muse Image edit API](https://dev.meta.ai/docs/image-generation), stores the painted image, then calls SAM again for a new full-character alpha mask. A cached painted image survives a failed mask retry. Original cutout, styled artwork and accepted audio remain distinct. No paid image request has been made or claimed as validated by the browser fixtures in this workspace.
-
-The import drawer honors individual capabilities: Meta-only setup can cut/style objects and keep raw audio; Modal-only setup can separate audio-only recordings. Video acceptance requires an actual object cutout. Controls are recomputed after asynchronous work, and prompt changes invalidate their previous candidates. Late poll replies are discarded; lost status checks and failed retries remain recoverable. `scripts/check_media_capabilities.py` verifies these cases using explicitly labelled fixtures against a demo gateway, without contacting live providers.
-
-`GET /api/media/{id}/frame?frame_s=0.5` supplies a session-private PNG preview when browser video decoding fails. It uses the same source orientation and frame extraction as segmentation, requires no model credentials, caches decoded frames server-side and returns `Cache-Control: private, no-store`. The client debounces fallback seeks, ignores old frame loads and keeps selection disabled until the requested frame is visible. The route validates timestamps and source access; actual FFmpeg decode, orientation, cache and isolation are covered by server tests.
-
-Create Modal Secrets through the Modal dashboard:
+Create these Modal Secrets in the dashboard:
 
 - `hf-sam-audio`: `HF_TOKEN` with gated model access.
 - `meta-model-api`: `MODEL_API_KEY`.
 - `junk-gateway`: a random 32+ character `JUNK_API_SESSION_SECRET`, and `CORS_ALLOWED_ORIGIN` set to the exact frontend origin.
 
-## Remote build and weights
+## Worker build and weights
 
-`SAM_AUDIO_REVISION` and `SAM_AUDIO_MODEL_REVISION` are pinned to the commits verified by ear, and `services/gpu/image_lock.py` pins every other package from that image, installed with `--no-deps` because some research packages declare conflicting requirements. Change the model revision together with `SAM_AUDIO_MODEL_ID`, because a revision belongs to one model. The base is PyTorch 2.8.0 / CUDA 12.8.
+`SAM_AUDIO_REVISION` and `SAM_AUDIO_MODEL_REVISION` are pinned to verified commits; change the model revision together with `SAM_AUDIO_MODEL_ID`. `services/gpu/image_lock.py` pins every other package in the image (installed with `--no-deps`). The base is PyTorch 2.8.0 / CUDA 12.8. The deployment module reads `.env` with shell variables taking precedence, and passes only an allowlist of non-secret settings to the images; tokens stay in Modal Secrets.
 
-The deployment module reads the local `.env` with shell variables taking precedence. Custom `JUNK_MODAL_APP` and `JUNK_MODAL_VOLUME` names are shared with the local bridge. Both remote images receive an explicit allowlist of non-secret worker settings, including the source and checkpoint revisions; account tokens remain in Modal Secrets. Preflight reports those settings and flags use of floating `main`. Its HF gate check uses the configured model and checkpoint revision rather than hard-coded defaults. A configured revision is not evidence that a remote download or inference has succeeded.
-
-```powershell
+```bash
 uv run modal run -m services.gpu.modal_app --download
+```
+
+```bash
 uv run modal deploy -m services.gpu.modal_app
 ```
 
-To use only the local gateway with the deployed worker, set `JUNK_MODAL_GATEWAY=false` in the shell for both commands. Only `hf-sam-audio` is then required; the hosted gateway and its secrets are left out.
+Set `JUNK_MODAL_GATEWAY=false` for both commands to deploy only the worker for use with a local gateway; then only `hf-sam-audio` is required.
 
-A job fails after 10 minutes on the worker (`WORKER_LIMIT_S`), and the gateway cancels the call and its containers. A worker that crashes at startup never fails its call, so this limit is what ends the job and stops the billing. A 13-minute gateway limit also covers moving media each way, and the `Separator` allows 10 minutes to start and 5 to run.
+Weights download on Modal into `/weights/hf`, never locally. Defaults: `facebook/sam-audio-small-tv` on one L40S, `predict_spans` on and eight reranking candidates, chosen by listening. An 8 s window took about 4.7 s and reserved 37.9 GB; `large-tv` needs an A100-80GB. Rerun `--download` after changing the model.
 
-Making a selection starts the worker early, so a cold start is usually under way before the sound is requested. That can bill up to about 3 idle minutes if no sound job follows. Metrics report `waited_for_gpu_s`, the time a job waited for its container. The `Separator` uses a CPU memory snapshot, so a restored container skips reading the model from the volume: the first cold start builds the snapshot, and Modal occasionally rebuilds it, which costs a normal slow start. `TORCHINDUCTOR_COMPILE_THREADS=1` is required, because `torch.compile` worker processes started during a snapshot have no GPU after a restore.
+The `Separator` uses a CPU memory snapshot so restored containers skip loading the model; `TORCHINDUCTOR_COMPILE_THREADS=1` is required for that. Making a selection warms the worker early, which can bill up to about 3 idle minutes if no sound job follows. A job fails after 10 minutes on the worker (`WORKER_LIMIT_S`) and the gateway cancels the call; the gateway's own limit is 13 minutes.
 
-Weight download runs on Modal, never on Windows/WSL. The model's auxiliary downloads also use `/weights/hf`. The GPU runtime loads the cached local checkpoint, starts no minimum containers, and caps the L40S worker at one container. The defaults are `facebook/sam-audio-small-tv` with `predict_spans` on and eight reranking candidates (`SAM_AUDIO_PREDICT_SPANS`, `SAM_AUDIO_RERANKING_CANDIDATES`), chosen by listening to real recordings. An 8-second window measured about 4.7 seconds of inference and 37.9 GB reserved of the L40S's 48 GB. `large-tv` reserved 47.8 GB, so it needs an A100-80GB. The download step also caches the ranking models on the weights volume; rerun it after changing the model.
+## Smoke test
 
-The gateway is a separate CPU function, capped at one container with concurrent inputs, sharing `/session-media`. CPU writes commit before GPU requests; GPU reloads before reads and commits before returning. Readiness reflects configured adapters, not verified model entitlement; use preflight plus the real smoke below.
-
-## Real inference smoke
-
-```powershell
+```bash
 uv run python scripts/smoke.py --api https://YOUR-GATEWAY.modal.run/api --source YOUR-OWN-tin.wav --description "metal can clanking" --start 0 --end 4 --require-live
 ```
 
-This uploads permissioned media, polls the job, downloads target/residual WAVs and logs measured metrics. Listen to both. Record checkpoint/source revisions, CUDA dependency freeze, GPU name, load time, warm/cold inference time, peak allocated/reserved memory, sample rate, duration and subjective leakage/faithfulness. A returned WAV alone does not prove correct object attribution. Repeat with a silent-negative source. Do not present mock artifacts as live evidence.
+This uploads your media, polls the job, downloads target and residual WAVs and logs metrics. Listen to both: a returned WAV does not prove correct attribution. Repeat with a silent source.
 
-For the complete video workflow, use a recording with both the object and its sound:
+Add `--character --concept "the red tin can" --frame 1 --output data/smoke-tin-live` with a video source to run the full paid flow: SAM cutout, Muse Image painting, new matte, and audio separation. It writes `original-cutout.png`, `cardboard-character.png`, `target.wav`, `residual.wav` and `report.json`. `status: ready` means structural checks passed, not that it looks or sounds good. A failed rerun replaces the report with `status: failed`.
 
-```powershell
-uv run python scripts/smoke.py --api https://YOUR-GATEWAY.modal.run/api --source YOUR-OWN-tin.mp4 --description "metal can clanking" --concept "the red tin can" --frame 1 --start 0 --end 4 --character --output data/smoke-tin-live
-```
-
-`--character` requires live mode and configured image, segmentation and audio adapters before uploading. It runs paid Meta image generation: source video → SAM cutout → reference-guided Muse Image edit → new SAM matte, followed by audio separation from the same uploaded recording. This command retains `original-cutout.png`, `cardboard-character.png`, `target.wav`, `residual.wav` and `report.json`. The report records provenance, source/output hashes, image dimensions and alpha range, WAV duration/rate/channels/RMS/peak and provider metrics. It checks that generation preserved the original cutout and produced a distinct transparent character, and rejects mock audio provenance in any live run. A failed rerun replaces the prior success report with `status: failed`; leftover artifacts are not evidence of a completed run.
-
-The character job paints one image of the object and cuts it out with SAM. There is no limb rigging: the prompt asks Muse Image to keep the object recognizable, with no face or limbs unless the details ask for them. Its plain paper is removed directly, which costs nothing and keeps every part of the object; SAM is only the fallback when the paper is not plain, because it has returned a few scattered pieces of a painted object while passing every structural check. Provenance says which method cut the image. Look at the results: structural checks cannot tell a good cutout from a broken one. Accepted images are single flat cutouts; rigged characters in older projects still play. Report `status: ready` means structural checks passed; it does not rate visual or audio quality. Without `--character` or `--require-live`, audio-only smoke also supports labelled demo testing; the default API is `http://127.0.0.1:5173/api`.
-
-### Separate limb review
-
-The same limb extractor is available separately for reviewing a saved character:
-
-```powershell
-uv run python scripts/rig_character.py --source data/smoke-tin-live/cardboard-character.png --output data/rig-review
-```
-
-This requires `MODEL_API_KEY` and the SAM parser in the actual interpreter. It makes up to four real SAM requests to isolate the arms and legs on their original shared canvas. It writes a body layer, four limb layers, cached masks and a `*-rig.json` manifest with normalized pivots, bounds and rotation limits. All print colors come from the input character. Wrong-side, oversized, overlapping, empty or misaligned masks fail explicitly. Successful masks survive retries; a mask rejected by validation is discarded so that retry can request a replacement. The completion manifest is published only after validation, and the source image is preserved. Input must have a usable alpha matte and fit within 2048 pixels on its longest side.
-
-This standalone command is not part of the app, which no longer rigs new images. It remains for reviewing limb extraction by hand.
+`scripts/rig_character.py --source <character.png>` separately extracts four SAM limb layers for review. The app no longer rigs new characters.
 
 ## Hosting for friends
 
-The hosted gateway serves the built page and the API from one address, so each browser gets its own signed anonymous session cookie and its own band in local storage, with no accounts. Build with `JUNK_API_BASE` unset, then deploy. The image gzips the engine files and serves them revalidated, so a deploy cannot mix old and new files.
+The hosted gateway serves the page and API from one address; each browser gets its own signed anonymous session and keeps its band locally. Build with `JUNK_API_BASE` unset, then deploy:
 
-```powershell
+```bash
 uv run python scripts/build_web.py
+```
+
+```bash
 uv run modal deploy -m services.gpu.modal_app
 ```
 
-`CORS_ALLOWED_ORIGIN` in the `junk-gateway` secret must be the site's own `https://` address, which also marks the cookie secure.
+`CORS_ALLOWED_ORIGIN` must be the site's own `https://` address, which also marks the cookie secure.
 
-**Limits.** `JUNK_DAILY_REQUEST_LIMIT` (default 90) caps requests that cost money across the whole site per UTC day, kept on the media volume so a restart does not reset it. Cached results do not count. Sounds run one at a time and paintings two at a time, in first-come order with the place in line shown, and a full queue refuses new requests.
+**Limits.** `JUNK_DAILY_REQUEST_LIMIT` (default 90) caps paid requests across the site per UTC day, stored on the media volume. Cached results do not count. Sounds run one at a time and paintings two at a time, first come first served, with queue position shown.
 
-**Budgets.** Before paid work the gateway reads the workspace's real Modal bill, at most every five minutes, and stops if anything has actually been charged or this month's usage reaches `JUNK_MODAL_MONTHLY_LIMIT` (default $20). This covers everything in the workspace. If the bill cannot be read the request goes ahead, because Modal's own account limit and the daily limit still apply; set a spend limit on the Modal account as well.
+**Budgets.** Before paid work the gateway reads the workspace's Modal bill (at most every five minutes) and stops if anything has been charged or this month's usage reaches `JUNK_MODAL_MONTHLY_LIMIT` (default $20). If the bill cannot be read the request proceeds, so also set a spend limit on the Modal account. Meta has no spend API: `JUNK_META_MONTHLY_LIMIT` (default $100) is checked against a running total the gateway adds up from published prices in `services/gateway/meta_costs.py`, counting only this site. A `402` from Meta pauses paid work for ten minutes. `GET /api/health` shows totals under `limits`.
 
-Meta has no balance or spend API, so `JUNK_META_MONTHLY_LIMIT` (default $100) is checked against a running total the gateway adds up itself, per call, at the published prices in `services/gateway/meta_costs.py`, using the token counts each reply reports. It only knows about this site: calls from a local gateway or another app on the same Meta account are not included, and the total starts at zero when first deployed. Check the real figure on Meta's dashboard. A `402 billing_error` from Meta, its documented answer for a low balance, also pauses paid work for ten minutes. `GET /api/health` shows the totals under `limits`.
+This is enough for a few friends, not a public launch: one gateway container, in-memory jobs.
 
-This is enough for a few friends, not a public launch. There is one gateway container, so jobs in memory fail with a retry if it restarts.
+## Retention
 
-## Retention and operations
-
-Source retrieval expires after 24 hours. Run `uv run python scripts/cleanup.py --root data --older-than-hours 24 --apply` locally. On Modal, a scheduled function removes sessions untouched for 24 hours from the media volume every day. Deleting a session uses `DELETE /api/session`; accepted browser assets remain playable. Stopping the gateway during a job causes an explicit failed state with retry/raw fallback. Use a durable queue/object storage for multi-container production use.
-
-No hosted repository, public website or hackathon submission is created by these scripts.
+Source retrieval expires after 24 hours. Locally, run `uv run python scripts/cleanup.py --root data --older-than-hours 24 --apply`; on Modal a daily scheduled function removes sessions untouched for 24 hours. `DELETE /api/session` removes a session's server media; accepted browser assets stay playable.

@@ -1,5 +1,4 @@
 import base64
-import json
 import logging
 from dataclasses import dataclass
 from importlib import import_module
@@ -8,15 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from openai import AsyncOpenAI
-from openai.types.chat import (
-    ChatCompletionAssistantMessageParam,
-    ChatCompletionMessageParam,
-    ChatCompletionToolParam,
-)
 from PIL import Image, ImageChops
 
-from services.gateway.meta_costs import SAM_IMAGE, WONDER, note_chat_cost, note_meta_cost
-from services.gateway.models import Action, Proposal, SegmentRequest, WonderRequest
+from services.gateway.meta_costs import SAM_IMAGE, note_meta_cost
+from services.gateway.models import SegmentRequest
 
 logger = logging.getLogger(__name__)
 
@@ -249,133 +243,3 @@ class MetaAdapter:
                 if previous is None or record.revision > previous.revision:
                     latest[record.object_id] = record
         return list(latest.values())
-
-    async def wonder(self, request: WonderRequest) -> Proposal:
-        snapshot = json.dumps([p.model_dump() for p in request.performers])
-        tools: list[ChatCompletionToolParam] = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_performers",
-                    "description": "Inspect the current performers before proposing a change.",
-                    "strict": True,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": [],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "preview_changes",
-                    "description": "Dry-run up to five bounded musical or motion actions.",
-                    "strict": True,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "actions": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "performerId": {"type": "string"},
-                                        "kind": {
-                                            "type": "string",
-                                            "enum": [
-                                                "set_motion",
-                                                "set_pattern_transform",
-                                                "set_gain_db",
-                                            ],
-                                        },
-                                        "value": {
-                                            "anyOf": [{"type": "string"}, {"type": "number"}]
-                                        },
-                                    },
-                                    "required": ["performerId", "kind", "value"],
-                                    "additionalProperties": False,
-                                },
-                            },
-                            "explanation": {"type": "string"},
-                        },
-                        "required": ["actions", "explanation"],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-        ]
-        messages: list[ChatCompletionMessageParam] = [
-            {
-                "role": "system",
-                "content": "You are a musical paper-puppet director. First inspect performers, then propose preview_changes. Never execute code. Motion: still/hop/dance/roll/glide. Rhythm operators: offbeat_echo/mirror/halve/fill. Gain: -30 to -3 dB. Only edit IDs returned by list_performers. Explain concisely. Do not claim to hear the result.",
-            },
-            {"role": "user", "content": request.instruction},
-        ]
-        trace: list[str] = []
-        for _ in range(4):
-            response = await self.client.chat.completions.create(
-                model="muse-wonder-1.0", messages=messages, tools=tools, tool_choice="required"
-            )
-            note_chat_cost(response, WONDER)
-            message = response.choices[0].message
-            if not message.tool_calls:
-                raise ValueError("Wonder did not return a tool call")
-            assistant: ChatCompletionAssistantMessageParam = {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.function.name,
-                            "arguments": call.function.arguments,
-                        },
-                    }
-                    for call in message.tool_calls
-                    if call.type == "function"
-                ],
-            }
-            if message.content:
-                assistant["content"] = message.content
-            messages.append(assistant)
-            for call in message.tool_calls:
-                if call.type != "function":
-                    raise ValueError("Unsupported tool call type")
-                arguments = json.loads(call.function.arguments)
-                if call.function.name == "list_performers":
-                    trace.append("list_performers → inspected the scene")
-                    messages.append({"role": "tool", "tool_call_id": call.id, "content": snapshot})
-                elif call.function.name == "preview_changes" and trace:
-                    actions = [Action.model_validate(action) for action in arguments["actions"]]
-                    validate_actions(actions, request)
-                    trace.append("preview_changes → validated IDs, operations and gain limits")
-                    return Proposal(
-                        explanation=arguments["explanation"],
-                        actions=actions,
-                        provenance="Muse Wonder",
-                        trace=trace,
-                    )
-                else:
-                    raise ValueError(
-                        "Wonder must inspect before previewing; unknown tools are rejected"
-                    )
-        raise ValueError("Wonder exceeded the bounded tool loop")
-
-
-def validate_actions(actions: list[Action], request: WonderRequest) -> None:
-    ids = {p.id for p in request.performers}
-    if not 1 <= len(actions) <= 5:
-        raise ValueError("Expected 1–5 actions")
-    for action in actions:
-        if action.performerId not in ids:
-            raise ValueError("Suggestion references an unknown performer")
-        if action.kind == "set_gain_db":
-            if not isinstance(action.value, (int, float)) or not -30 <= action.value <= -3:
-                raise ValueError("Gain outside safe limits")
-        elif action.kind == "set_motion":
-            if action.value not in {"still", "hop", "dance", "roll", "glide"}:
-                raise ValueError("Unknown motion")
-        elif action.value not in {"offbeat_echo", "mirror", "halve", "fill"}:
-            raise ValueError("Unknown rhythm operator")

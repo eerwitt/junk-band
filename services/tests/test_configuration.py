@@ -77,12 +77,14 @@ def test_local_live_cookies_and_origin_aliases(tmp_path: Path) -> None:
     assert not settings.allows_origin("http://localhost:5174")
     assert not settings.allows_origin("https://example.com")
     with TestClient(create_app(settings)) as client:
-        response = client.post(
-            "/api/interpret", json={"description": "tin"}, headers={"Origin": "https://example.com"}
-        )
-        assert response.status_code == 403
         content = io.BytesIO()
         Image.new("RGB", (20, 20), "orange").save(content, format="PNG")
+        response = client.post(
+            "/api/media",
+            files={"file": ("source.png", content.getvalue(), "image/png")},
+            headers={"Origin": "https://example.com"},
+        )
+        assert response.status_code == 403
         response = client.post(
             "/api/media",
             files={"file": ("source.png", content.getvalue(), "image/png")},

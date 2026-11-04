@@ -1,5 +1,6 @@
 import asyncio
 import gzip
+import io
 import os
 import time
 from decimal import Decimal
@@ -10,6 +11,7 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from services.gateway.app import create_app
 from services.gateway.config import Settings
@@ -219,17 +221,21 @@ def live_settings(tmp_path: Path, limit: int) -> Settings:
     )
 
 
+def png() -> bytes:
+    content = io.BytesIO()
+    Image.new("RGB", (20, 20), "orange").save(content, format="PNG")
+    return content.getvalue()
+
+
 def test_paid_routes_answer_to_the_daily_limit_before_calling_anyone(tmp_path: Path) -> None:
     with TestClient(create_app(live_settings(tmp_path, 0))) as client:
-        for path, body in (
-            ("/api/interpret", {"description": "a tin"}),
-            ("/api/wonder", {"instruction": "x", "performers": []}),
-        ):
-            response = client.post(path, json=body)
-            if response.status_code == 422:
-                continue
-            assert response.status_code == 429, (path, response.text)
-            assert "today" in response.json()["detail"]
+        media = client.post("/api/media", files={"file": ("source.png", png(), "image/png")})
+        assert media.status_code == 200, media.text
+        response = client.post(
+            "/api/segment", json={"media_id": media.json()["id"], "frame_s": 0, "concept": "tin"}
+        )
+        assert response.status_code == 429, response.text
+        assert "today" in response.json()["detail"]
         limits = client.get("/api/health").json()["limits"]
     assert limits["requests_today"] == 0 and limits["daily_limit"] == 0
     assert "today" in limits["paused"]
@@ -239,18 +245,16 @@ def test_the_site_trusts_its_own_address_and_no_other(tmp_path: Path) -> None:
     with TestClient(
         create_app(live_settings(tmp_path, 5)), base_url="https://junk.example"
     ) as client:
-        ours = client.post(
-            "/api/interpret",
-            json={"description": "a tin"},
-            headers={"origin": "https://junk.example"},
-        )
-        assert ours.status_code != 403
-        other = client.post(
-            "/api/interpret",
-            json={"description": "a tin"},
-            headers={"origin": "https://elsewhere.example"},
-        )
-        assert other.status_code == 403
+        for origin, allowed in (
+            ("https://junk.example", True),
+            ("https://elsewhere.example", False),
+        ):
+            response = client.post(
+                "/api/media",
+                files={"file": ("source.png", png(), "image/png")},
+                headers={"origin": origin},
+            )
+            assert (response.status_code != 403) == allowed, (origin, response.text)
 
 
 def test_modal_stops_at_its_budget_from_the_real_bill(tmp_path: Path) -> None:

@@ -1,36 +1,29 @@
-import {
-  gateway,
-  type Health,
-  type Media,
-  type Picked,
-} from "../../services/gateway";
-import { button, element, field, setBlocked, textInput } from "../dom";
+import { gateway, type Media } from "../../services/gateway";
+import { button, element, setBlocked, textInput } from "../dom";
 import { MaskEditor } from "../mask-editor";
-import { PaperWait, type WaitNote } from "../paper-wait";
 
-/** The object chosen to become a band member. */
-export interface Chosen {
-  cutoutId: string;
-  cutoutUrl: string;
-  maskUrl?: string;
-  cardUrl: string;
-  frameS: number;
-  name: string;
-  sound: string;
-  provenance: string;
+/** What Make it hands on: the words, and for a picture, where the thing is. */
+export interface Made {
+  description: string;
+  picture?: {
+    frameS: number;
+    /** The painted area as a 0–1 box. */
+    box: number[];
+    mask: Blob;
+    /** Just the painted part of the frame, to show while it is being cut. */
+    preview?: string;
+    /** Changes whenever the frame or the painting does. */
+    key: string;
+  };
 }
 
 type StepState = "todo" | "active" | "done";
 interface Step {
   root: HTMLElement;
   tab: HTMLElement;
-  title: HTMLElement;
   number: string;
 }
 
-const LOOK_NOTES: readonly WaitNote[] = [
-  [15, "Still cutting carefully. This can take up to a minute."],
-];
 const FRAME_DELAY_MS = 120;
 const KEY_STEP_S = 0.1;
 /** About how wide the strip shows, to choose how many whole frames fit along it. */
@@ -38,17 +31,21 @@ const STRIP_WIDTH_PX = 640;
 const FRAME_HEIGHT_PX = 46;
 const MIN_FRAMES = 4;
 const MAX_FRAMES = 24;
+const MAX_DESCRIPTION = 100;
 
 function makeStep(number: string, title: string, hint: string): Step {
   const root = element("li", "make-step");
   const tab = element("span", "make-tab", number);
   tab.setAttribute("aria-hidden", "true");
-  const heading = element("strong", "make-title", title);
-  root.append(tab, heading, element("p", "fine make-hint", hint));
-  return { root, tab, title: heading, number };
+  root.append(
+    tab,
+    element("strong", "make-title", title),
+    element("p", "fine make-hint", hint)
+  );
+  return { root, tab, number };
 }
 
-/** Pick a frame, paint a rough mask over the thing, say what it is, and let it be cut out. */
+/** Pick a frame, paint over the thing, and say what you want to hear from it. */
 export class ObjectsPhase {
   readonly root = element("section", "objects-phase");
   private stage = element("div", "object-stage");
@@ -59,7 +56,6 @@ export class ObjectsPhase {
   private stripAll = element("span", "film-stock frame-all");
   private stripPicked = element("span", "film-stock frame-picked");
   private viewfinder = element("span", "frame-viewfinder");
-  private rail = element("div", "object-rail");
   private frameStep = makeStep(
     "1",
     "Pick the frame",
@@ -72,44 +68,23 @@ export class ObjectsPhase {
   );
   private describeStep = makeStep(
     "3",
-    "Say what it is",
-    "A word or two helps. Leave it blank and we'll take a guess."
+    "Say what you want to hear",
+    "We pull that sound out and cut your thing out at the same time."
   );
-  private keepStep = makeStep(
-    "4",
-    "Keep it",
-    "Happy? Paint or erase to fix it, or say which sound to pull."
-  );
-  private sprites = element("div", "object-sprites");
-  private wait = new PaperWait();
+  private describe = textInput("What do you want to hear?");
+  private makeButton = button("Make it", () => void this.make(), "primary");
   private status = element("p", "feedback");
-  private describe = textInput("What is it?");
-  private cutButton = button("Cut it out", () => void this.cut(), "primary");
-  private soundName = textInput("Sound to pull");
-  private useButton = button("Use this one", () => this.use(), "primary");
   private mask: MaskEditor;
-  private cards = new Map<string, HTMLButtonElement>();
-  private found: Chosen[] = [];
-  private selected?: Chosen;
   private media?: Media;
   private keptStart = 0;
   private keptEnd = 0;
-  private soundStart = 0;
-  private soundEnd = 0;
-  private epoch = 0;
-  private busy = false;
   private frameReady = false;
   private currentFrame = 0;
   private frameShare = 1 / MIN_FRAMES;
   private frameTimer?: number;
-  private service?: Health;
+  private busy = false;
 
-  constructor(
-    private readonly onUse: (
-      chosen: Chosen,
-      sound: { start: number; end: number }
-    ) => void
-  ) {
+  constructor(private readonly onMake: (made: Made) => void) {
     this.picture.alt = "Frame of the video to paint on";
     this.picture.draggable = false;
     // Painted frames are read back to show them being cut.
@@ -122,13 +97,7 @@ export class ObjectsPhase {
       this.frameReady = true;
       this.update();
     });
-    this.mask = new MaskEditor(
-      this.preview,
-      16,
-      9,
-      () => this.update(),
-      () => void this.applyMask()
-    );
+    this.mask = new MaskEditor(this.preview, 16, 9, () => this.update());
     this.paintHint.setAttribute("aria-hidden", "true");
     this.preview.append(
       this.picture,
@@ -140,71 +109,60 @@ export class ObjectsPhase {
     this.bindStrip();
     this.stage.append(this.preview, this.strip, this.mask.tools);
 
-    this.status.setAttribute("role", "status");
+    this.describe.maxLength = MAX_DESCRIPTION;
+    this.describe.placeholder = "the tin can clanking";
     this.describe.addEventListener("input", () => this.update());
     this.describe.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !this.cutButton.disabled) void this.cut();
+      if (event.key === "Enter" && !this.makeButton.disabled) void this.make();
     });
-    this.soundName.addEventListener("input", () => {
-      if (this.selected) this.selected.sound = this.soundName.value;
-      this.update();
-    });
-    const describeBody = element("div", "make-body object-describe");
-    describeBody.append(field("What is it?", this.describe), this.cutButton);
-    this.describeStep.root.append(describeBody, this.wait.root);
-    const keepBody = element("div", "make-body");
-    keepBody.append(
-      this.sprites,
-      field("Sound to pull", this.soundName),
-      this.useButton
-    );
-    this.keepStep.root.append(keepBody);
+    const describeBody = element("div", "make-body");
+    describeBody.append(this.describe);
+    this.describeStep.root.append(describeBody);
     const steps = element("ol", "make-steps");
     steps.append(
       this.frameStep.root,
       this.paintStep.root,
-      this.describeStep.root,
-      this.keepStep.root
+      this.describeStep.root
     );
-    this.rail.append(steps, this.status);
-    this.root.append(this.stage, this.rail);
+    this.status.setAttribute("role", "status");
+    const rail = element("div", "object-rail");
+    rail.append(steps, this.makeButton, this.status);
+    this.root.append(this.stage, rail);
   }
 
-  setService(service?: Health): void {
-    this.service = service;
-    this.update();
-  }
-
-  /** Ignore replies to work that has been replaced by another source. */
-  reset(): void {
-    this.epoch++;
-    this.busy = false;
-    window.clearTimeout(this.frameTimer);
-    this.wait.hide();
-  }
-
+  /** A new source starts clean; a new stretch of the same one keeps the words. */
   open(media: Media, start: number, end: number): void {
-    this.reset();
+    window.clearTimeout(this.frameTimer);
+    const sameSource = media.id === this.media?.id;
     this.media = media;
     this.keptStart = start;
     this.keptEnd = end;
-    this.soundStart = start;
-    this.soundEnd = end;
-    this.found = [];
-    this.cards.clear();
-    this.sprites.replaceChildren();
-    this.selected = undefined;
+    this.busy = false;
     this.status.textContent = "";
     this.status.classList.remove("error");
-    this.describe.value = "";
-    this.soundName.value = "";
-    this.mask.clear();
-    this.mask.setTool("paint");
-    const hasFilm = end > start && media.duration_s > 0;
-    this.strip.hidden = !hasFilm;
-    this.frameStep.root.hidden = !hasFilm;
-    if (hasFilm) this.loadStrip(media, start, end);
-    this.showFrame(start + (end - start) / 2);
+    if (!sameSource) this.describe.value = "";
+    const hasPicture = media.width > 0;
+    this.root.classList.toggle("no-picture", !hasPicture);
+    this.stage.hidden = !hasPicture;
+    this.frameStep.root.hidden = !hasPicture;
+    this.paintStep.root.hidden = !hasPicture;
+    this.describeStep.tab.textContent = this.describeStep.number = hasPicture
+      ? "3"
+      : "1";
+    if (hasPicture) {
+      this.loadStrip(media, start, end);
+      const inside = this.currentFrame >= start && this.currentFrame <= end;
+      if (!sameSource) this.picture.removeAttribute("src");
+      if (!sameSource || !inside) {
+        this.mask.clear();
+        this.mask.setTool("paint");
+        this.showFrame(start + (end - start) / 2);
+      } else this.drawStrip();
+    }
+    this.update();
+    window.setTimeout(() => {
+      if (!hasPicture) this.describe.focus();
+    });
   }
 
   /** As many whole frames as fit, so each one on the strip looks like the frame it is. */
@@ -275,10 +233,8 @@ export class ObjectsPhase {
       Math.min(Math.max(this.keptStart, this.keptEnd - 0.05), seconds)
     );
     if (Math.abs(frame - this.currentFrame) < 0.01) return;
-    this.selected = undefined;
     this.mask.clear();
     this.mask.setTool("paint");
-    this.markSelected();
     this.showFrame(frame, FRAME_DELAY_MS);
   }
 
@@ -319,182 +275,37 @@ export class ObjectsPhase {
     );
   }
 
-  private canFind(): boolean {
-    return !this.service || this.service.sam;
-  }
-
-  /** Cut along the painted mask, with the words to tell the model what it is. */
-  private async cut(): Promise<void> {
-    if (!this.canFind()) {
-      await this.applyMask();
+  private async make(): Promise<void> {
+    const media = this.media;
+    const description = this.describe.value.trim();
+    if (!media || !description || this.busy) return;
+    if (!media.width) {
+      this.onMake({ description });
       return;
     }
-    const media = this.media;
     const box = this.mask.paintedBox();
-    if (!media || !box || this.busy) return;
-    const epoch = this.epoch;
-    const concept = this.describe.value.trim() || null;
+    if (!box) return;
     this.busy = true;
-    this.status.textContent = "";
-    this.status.classList.remove("error");
-    this.wait.show({
-      scene: "cut",
-      image: this.mask.paintedPicture(this.picture),
-      line: concept
-        ? `Snipping out “${concept}”…`
-        : "Working out what you painted…",
-      notes: LOOK_NOTES,
-    });
     this.update();
     try {
-      const painted = await this.mask.toBlob();
-      let picked = await gateway.pick(
-        media.id,
-        this.currentFrame,
-        box,
-        concept,
-        this.keptStart,
-        this.keptEnd
-      );
-      if (epoch !== this.epoch) return;
-      // With nothing better found, the painted mask itself is the selection.
-      if (picked.provenance.startsWith("Rough selection")) {
-        const own = await gateway.maskCutout(
-          media.id,
-          this.currentFrame,
-          painted
-        );
-        if (epoch !== this.epoch) return;
-        picked = {
-          ...picked,
-          cutout_id: own.cutout_id,
-          cutout_url: own.cutout_url,
-          mask_url: own.mask_url ?? picked.mask_url,
-          card_url: own.card_url ?? picked.card_url,
-          provenance: own.provenance,
-        };
-      }
-      this.soundStart = picked.sound_start_s;
-      this.soundEnd = picked.sound_end_s;
-      if (!concept) this.describe.value = picked.name;
-      await this.arrive(picked, concept);
+      this.onMake({
+        description,
+        picture: {
+          frameS: this.currentFrame,
+          box,
+          mask: await this.mask.toBlob(),
+          preview: this.mask.paintedPicture(this.picture),
+          key: `${this.currentFrame.toFixed(2)}:${this.mask.revision}`,
+        },
+      });
     } catch (error) {
-      if (epoch === this.epoch)
-        this.say(error instanceof Error ? error.message : String(error));
+      this.status.textContent =
+        error instanceof Error ? error.message : String(error);
+      this.status.classList.add("error");
     } finally {
-      if (epoch === this.epoch) {
-        this.busy = false;
-        this.wait.hide();
-        this.update();
-      }
+      this.busy = false;
+      this.update();
     }
-  }
-
-  private async arrive(picked: Picked, concept: string | null): Promise<void> {
-    const known = this.found.find((item) => item.cutoutId === picked.cutout_id);
-    const chosen: Chosen = known ?? {
-      cutoutId: picked.cutout_id,
-      cutoutUrl: picked.cutout_url,
-      maskUrl: picked.mask_url,
-      cardUrl: picked.card_url,
-      frameS: picked.frame_s,
-      name: picked.name,
-      sound: picked.sound || concept || "",
-      provenance: picked.provenance,
-    };
-    if (!known) this.addSprite(chosen);
-    await this.select(chosen);
-  }
-
-  private addSprite(chosen: Chosen): void {
-    this.found.push(chosen);
-    const card = button("", () => void this.select(chosen));
-    card.className = "sprite-card";
-    const image = element("img");
-    image.src = gateway.assetUrl(chosen.cardUrl);
-    image.alt = "";
-    image.draggable = false;
-    card.append(image, element("span", "sprite-name", chosen.name));
-    card.setAttribute("aria-label", `Choose ${chosen.name}`);
-    this.cards.set(chosen.cutoutId, card);
-    this.sprites.append(card);
-    this.markSelected();
-  }
-
-  private markSelected(): void {
-    for (const [id, card] of this.cards)
-      card.setAttribute("aria-pressed", String(id === this.selected?.cutoutId));
-  }
-
-  private async select(chosen: Chosen): Promise<void> {
-    this.selected = chosen;
-    this.soundName.value = chosen.sound;
-    this.markSelected();
-    if (Math.abs(chosen.frameS - this.currentFrame) > 0.01)
-      this.showFrame(chosen.frameS);
-    if (chosen.maskUrl) await this.mask.load(chosen.maskUrl);
-    this.update();
-  }
-
-  private say(message: string): void {
-    this.status.textContent = message;
-    this.status.classList.add("error");
-    this.status.scrollIntoView({ block: "nearest" });
-  }
-
-  private async applyMask(): Promise<void> {
-    const media = this.media;
-    if (!media || this.busy) return;
-    const epoch = this.epoch;
-    const base = this.selected;
-    this.busy = true;
-    this.status.textContent = "";
-    this.status.classList.remove("error");
-    this.update();
-    try {
-      const result = await gateway.maskCutout(
-        media.id,
-        this.currentFrame,
-        await this.mask.toBlob(),
-        base?.cutoutId
-      );
-      if (epoch !== this.epoch) return;
-      this.mask.markApplied();
-      const updated: Chosen = {
-        cutoutId: result.cutout_id,
-        cutoutUrl: result.cutout_url,
-        maskUrl: result.mask_url,
-        cardUrl: result.card_url ?? base?.cardUrl ?? result.cutout_url,
-        frameS: this.currentFrame,
-        name: base?.name ?? (this.describe.value.trim() || "my object"),
-        sound: this.soundName.value.trim() || base?.sound || "",
-        provenance: result.provenance,
-      };
-      if (base) {
-        this.cards.get(base.cutoutId)?.remove();
-        this.cards.delete(base.cutoutId);
-        this.found = this.found.filter((item) => item !== base);
-      }
-      this.addSprite(updated);
-      this.selected = updated;
-      this.markSelected();
-    } catch (error) {
-      if (epoch === this.epoch)
-        this.say(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (epoch === this.epoch) {
-        this.busy = false;
-        this.update();
-      }
-    }
-  }
-
-  private use(): void {
-    if (!this.selected) return;
-    this.onUse(
-      { ...this.selected, sound: this.soundName.value.trim() },
-      { start: this.soundStart, end: this.soundEnd }
-    );
   }
 
   private setStep(step: Step, state: StepState): void {
@@ -504,36 +315,26 @@ export class ObjectsPhase {
   }
 
   private update(): void {
+    const hasPicture = Boolean(this.media?.width);
     const painted = !this.mask.isEmpty;
-    const cutOut = Boolean(this.selected);
-    const ready = !this.busy && this.frameReady;
-    this.mask.setEnabled(ready);
-    this.mask.setEditing(cutOut);
-    this.paintHint.hidden = painted || !ready;
+    const described = Boolean(this.describe.value.trim());
+    this.mask.setEnabled(!this.busy && this.frameReady);
+    this.paintHint.hidden = painted || !this.frameReady;
     this.setStep(this.frameStep, painted ? "done" : "active");
     this.setStep(this.paintStep, painted ? "done" : "active");
     this.setStep(
       this.describeStep,
-      cutOut && !this.mask.dirty ? "done" : painted ? "active" : "todo"
-    );
-    this.setStep(this.keepStep, cutOut ? "active" : "todo");
-    this.keepStep.title.textContent = this.selected
-      ? `Got it: ${this.selected.name}!`
-      : "Keep it";
-    this.cutButton.classList.toggle("primary", !cutOut || this.mask.dirty);
-    const wait = this.busy ? "Wait for the current step to finish." : "";
-    setBlocked(
-      this.cutButton,
-      wait || (painted ? "" : "Paint over your thing first.")
+      described && (painted || !hasPicture) ? "done" : "active"
     );
     setBlocked(
-      this.useButton,
-      wait ||
-        (this.mask.dirty
-          ? "Choose Use this mask to keep your painting, or undo it, first."
-          : "") ||
-        (this.selected ? "" : "Cut something out first.") ||
-        (this.soundName.value.trim() ? "" : "Say which sound to pull first.")
+      this.makeButton,
+      this.busy
+        ? "Getting it ready…"
+        : hasPicture && !painted
+        ? "Paint over your thing first."
+        : !described
+        ? "Say what you want to hear first."
+        : ""
     );
   }
 }

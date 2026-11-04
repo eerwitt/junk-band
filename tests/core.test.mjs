@@ -24,7 +24,6 @@ import {
   loopSteps,
   pulseAtAge,
 } from "../dist/modules/domain/timing.js";
-import { previewProposal } from "../dist/modules/services/proposal.js";
 import {
   noteRow,
   playbackRate,
@@ -518,42 +517,5 @@ describe("song arrangement", () => {
     );
     assert.equal(sectionGain(project, "p-0", 0), 0);
     assert.equal(sectionGain(project, "p-0", 18), 1);
-  });
-});
-
-describe("bounded director commands", () => {
-  it("rejects unknown performers, arbitrary operations and unsafe gain", () => {
-    const proposal = {
-      explanation: "test",
-      provenance: "mock rule",
-      trace: [],
-      actions: [
-        { performerId: "p-0", kind: "set_pattern_transform", value: "eval()" },
-      ],
-    };
-    assert.throws(
-      () => previewProposal(demoProject(), proposal),
-      /Unknown rhythm/
-    );
-    proposal.actions[0].performerId = "another-scene";
-    assert.throws(
-      () => previewProposal(demoProject(), proposal),
-      /outside this scene/
-    );
-    proposal.actions = [{ performerId: "p-0", kind: "set_gain_db", value: 10 }];
-    assert.throws(() => previewProposal(demoProject(), proposal), /safe range/);
-  });
-  it("previews a valid proposal without mutating the user's scene", () => {
-    const project = demoProject(),
-      before = structuredClone(project);
-    const proposal = {
-      explanation: "test",
-      provenance: "mock rule",
-      trace: [],
-      actions: [{ performerId: "p-0", kind: "set_motion", value: "hop" }],
-    };
-    const candidate = previewProposal(project, proposal);
-    assert.equal(candidate.performers[0].motion, "hop");
-    assert.deepEqual(project, before);
   });
 });

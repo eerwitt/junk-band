@@ -119,7 +119,9 @@ def main() -> None:
         dropped = change_then_listen(page, spotlight % json.dumps({"id": first}))
         assert dropped < band * 0.5, f"The band drops back at once: {band} then {dropped}"
         returned = change_then_listen(page, spotlight % "{}")
-        assert returned > dropped * 2, f"Closing the card gives the song back: {dropped} then {returned}"
+        assert returned > dropped * 2, (
+            f"Closing the card gives the song back: {dropped} then {returned}"
+        )
         # It is heard even when it would otherwise be silent.
         change_then_listen(page, "sendAll({ mute: true, gainDb: -6 })")
         silent = page.evaluate("window.loudest(150)")
@@ -130,7 +132,9 @@ def main() -> None:
         gone = page.evaluate("window.loudest(150)")
         assert gone < 0.002, f"Muted again once the card closes: {gone}"
         browser.close()
-    print("Audio response fixture passed: volume, drag out and in, mute and the punch card are heard at once")
+    print(
+        "Audio response fixture passed: volume, drag out and in, mute and the punch card are heard at once"
+    )
 
 
 if __name__ == "__main__":

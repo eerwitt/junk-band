@@ -279,9 +279,6 @@ p {
   display: flex;
   gap: 3px;
 }
-.mask-note {
-  flex: 1 0 100%;
-}
 .mask-size {
   flex: 1 1 110px;
   gap: 2px;
@@ -575,9 +572,6 @@ p {
   width: 62%;
   transform: translate(-50%, -50%) scaleX(-1);
   overflow: visible;
-}
-.finish-result.arrived {
-  animation: wait-arrive 280ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes wait-appear {
   from {
@@ -999,9 +993,6 @@ p {
   flex: 1 1 auto;
   font-variant-numeric: tabular-nums;
 }
-.clip-sound {
-  max-width: 420px;
-}
 .objects-phase {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
@@ -1142,111 +1133,138 @@ p {
 .object-rail > .primary {
   align-self: stretch;
 }
-.object-rail .text-button {
-  align-self: flex-start;
+.preview-time {
+  font-variant-numeric: tabular-nums;
 }
-.object-sprites {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  gap: 8px;
+.add-header > button {
+  margin-left: auto;
 }
-.object-sprites:empty {
-  display: none;
+.clip-hint {
+  flex: 1 1 200px;
+  margin: 0;
+  text-align: right;
 }
-.sprite-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-height: 0;
-  padding: 6px;
-  border: 0;
-  background: transparent;
-  animation: wait-arrive 280ms cubic-bezier(0.16, 1, 0.3, 1);
+.objects-phase.no-picture {
+  grid-template-columns: minmax(0, 420px);
+  justify-content: center;
 }
-.sprite-card:hover {
-  background: #f0e9d8;
-}
-.sprite-card[aria-pressed="true"] {
-  background: var(--mint);
-}
-.sprite-card img {
+.make-body input {
   width: 100%;
-  height: 72px;
-  object-fit: contain;
-  filter: drop-shadow(2px 3px 2px #58482b40);
 }
-.sprite-name {
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.object-describe,
-.finish-retry {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
-}
-.make-body.object-describe {
-  flex-direction: row;
-}
-.object-describe .field,
-.finish-retry .field {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.finish-phase {
+/* Listen and add: two panels, each a cream card on the table showing the choice in hand. */
+.review-phase {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
-.finish-columns {
+.review-panels {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: clamp(16px, 3vw, 36px);
   align-items: start;
 }
-.finish-preview video {
-  display: block;
+.review-phase.no-picture .review-panels {
+  grid-template-columns: minmax(0, 520px);
+  justify-content: center;
+}
+.review-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.review-panel[hidden] {
+  display: none;
+}
+.review-panel h3 {
+  margin: 0;
+}
+.review-stage {
+  position: relative;
+  height: min(40dvh, 340px);
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  background: #fffdf5;
+  box-shadow: 3px 5px 0 #58482b14, 0 8px 18px #58482b1f;
+  clip-path: polygon(
+    0.6% 1.2%,
+    46% 0,
+    99.4% 0.8%,
+    100% 98.6%,
+    54% 100%,
+    0 99.2%
+  );
+}
+.review-art {
   width: 100%;
-  max-height: 46dvh;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+  filter: drop-shadow(3px 5px 3px #58482b45);
+  animation: wait-arrive 280ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.review-stage > .paper-wait {
+  width: 100%;
+}
+.review-sound-stage {
+  grid-template-rows: minmax(0, 1fr) auto;
+  place-items: stretch;
+  gap: 10px;
+}
+.review-sound-stage:not(.waiting) > .paper-wait,
+.review-sound-stage.waiting > :not(.paper-wait) {
+  display: none;
+}
+.review-sound-stage.waiting {
+  place-items: center;
+}
+.review-wave {
+  width: 100%;
+  height: 100%;
+  min-height: 80px;
   cursor: pointer;
 }
-.finish-preview .video-card {
-  width: fit-content;
-}
-.preview-controls {
+.review-transport {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 14px;
 }
-.preview-time {
-  font-variant-numeric: tabular-nums;
-}
-.finish-column {
+/* Two paper tabs; the one in hand is pressed in mint, like the brush tools. */
+.review-choice {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
+  gap: 4px;
 }
-.finish-column[hidden] {
+.review-choice[hidden] {
   display: none;
 }
-.finish-column h3 {
+.review-choice button {
+  flex: 1 1 0;
+  border: 0;
+  border-radius: 0;
+  background: #f0e9d8;
+  clip-path: polygon(2% 6%, 52% 0, 98% 5%, 100% 92%, 48% 100%, 0 95%);
+}
+.review-choice button:hover:not(:disabled) {
+  background: #e8dfca;
+}
+.review-choice button[aria-pressed="true"] {
+  background: var(--mint);
+}
+.review-progress .wait-line {
   margin: 0;
 }
-.finish-result {
+.review-notes {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: baseline;
+  gap: 10px;
 }
-.finish-looks {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+.review-notes .fine {
+  flex: 1 1 auto;
+  margin: 0;
 }
-.finish-looks .sprite-card img {
-  height: min(22dvh, 170px);
+.review-notes .text-button[hidden] {
+  display: none;
 }
 @media (max-width: 860px) {
   .add-studio {
@@ -1282,19 +1300,11 @@ p {
     max-height: 44dvh;
   }
   .objects-phase,
-  .finish-columns {
+  .review-panels {
     grid-template-columns: minmax(0, 1fr);
   }
-  .object-sprites {
-    display: flex;
-    overflow-x: auto;
-    padding-bottom: 4px;
-  }
-  .object-sprites:empty {
-    display: none;
-  }
-  .sprite-card {
-    flex: 0 0 96px;
+  .review-stage {
+    height: min(34dvh, 260px);
   }
 }
 audio {

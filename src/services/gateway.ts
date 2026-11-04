@@ -5,7 +5,6 @@ const healthSchema = z.object({
   mode: z.enum(["mock", "live"]),
   sam: z.boolean(),
   audio: z.boolean(),
-  wonder: z.boolean(),
   image: z.boolean().default(false),
 });
 export type Health = z.infer<typeof healthSchema>;
@@ -83,22 +82,6 @@ const pickedSchema = z.object({
   provenance: z.string(),
 });
 export type Picked = z.infer<typeof pickedSchema>;
-export const proposalSchema = z.object({
-  explanation: z.string(),
-  provenance: z.enum(["mock rule", "Muse Wonder"]),
-  actions: z
-    .array(
-      z.object({
-        performerId: z.string(),
-        kind: z.enum(["set_motion", "set_pattern_transform", "set_gain_db"]),
-        value: z.union([z.string(), z.number()]),
-      })
-    )
-    .min(1)
-    .max(5),
-  trace: z.array(z.string()),
-});
-export type Proposal = z.infer<typeof proposalSchema>;
 
 async function request(path: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(`${base}${path}`, {
@@ -145,23 +128,6 @@ export const gateway = {
       })
     );
   },
-  segment: async (
-    mediaId: string,
-    frameS: number,
-    concept: string,
-    box: number[] | null
-  ): Promise<Cutout> =>
-    cutoutSchema.parse(
-      await request("/segment", {
-        ...json({
-          media_id: mediaId,
-          frame_s: frameS,
-          concept: box ? null : concept,
-          box,
-        }),
-        signal: AbortSignal.timeout(120000),
-      })
-    ),
   pick: async (
     mediaId: string,
     frameS: number,
@@ -239,40 +205,6 @@ export const gateway = {
         signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
       })
     ),
-  wonder: async (instruction: string, performers: unknown): Promise<Proposal> =>
-    proposalSchema.parse(
-      await request("/wonder", {
-        ...json({ instruction, performers }),
-        signal: AbortSignal.timeout(120000),
-      })
-    ),
-  interpret: async (
-    description: string
-  ): Promise<{
-    concept: string;
-    sound_description: string;
-    provenance: string;
-  }> =>
-    z
-      .object({
-        concept: z.string(),
-        sound_description: z.string(),
-        provenance: z.string(),
-      })
-      .parse(await request("/interpret", json({ description }))),
-  transcribe: async (
-    blob: Blob
-  ): Promise<{ text: string; provenance: string }> => {
-    const form = new FormData();
-    form.append("file", blob, "command.webm");
-    return z.object({ text: z.string(), provenance: z.string() }).parse(
-      await request("/transcribe", {
-        method: "POST",
-        body: form,
-        signal: AbortSignal.timeout(100000),
-      })
-    );
-  },
   assetUrl: (path: string): string =>
     path.startsWith("/") ? `${base}${path}` : path,
   blob: async (path: string): Promise<Blob> => {
