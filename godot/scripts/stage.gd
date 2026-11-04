@@ -296,6 +296,11 @@ func _section_id_at(beat_value: float) -> String:
 	return str(sections[section].id) if section >= 0 and section < sections.size() else ""
 
 
+## The section a drop off the stage sits someone out of.
+func _drop_section() -> String:
+	return focus_id if not focus_id.is_empty() else _section_id_at(scrubber.beat)
+
+
 func _sits_out(id: String, beat_value: float) -> bool:
 	var section: int = scrubber.section_at_fraction(fposmod(beat_value, JunkLoopTiming.BEATS) / JunkLoopTiming.BEATS)
 	if section < 0 or section >= sections.size(): return false
@@ -714,10 +719,13 @@ func _gui_input(event: InputEvent) -> void:
 				elif _moved and _sits_out(_drag_id, scrubber.beat) and _outside_ring(_drag_point):
 					# Already waiting outside: wherever they are put is their spot from now on.
 					_rest_in_wings(_drag_id, _drag_point)
-				elif _moved and not focus_id.is_empty() and _outside_ring(_drag_point):
-					# Off the stage in a section means sitting it out, waiting where they were dropped.
+				elif _moved and _outside_ring(_drag_point) and not _drop_section().is_empty():
+					# Off the stage means sitting out one section, waiting where they were dropped:
+					# the one being looped, or else the one playing now. Their spot on stage, and
+					# every other section, stay as they were.
+					var section_id: String = _drop_section()
 					_rest_in_wings(_drag_id, _drag_point)
-					action.emit("set_part", {"sectionId": focus_id, "id": _drag_id, "present": false})
+					action.emit("set_part", {"sectionId": section_id, "id": _drag_id, "present": false})
 				elif _moved:
 					var target: Vector2 = _drag_point
 					if _sits_out(_drag_id, scrubber.beat):

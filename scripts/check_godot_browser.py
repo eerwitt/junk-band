@@ -312,6 +312,40 @@ def check_ring_sections(page: Page, output: Path) -> None:
     page.wait_for_function("b => window.JUNK.beat() > b", arg=end + 0.5, timeout=20000)
     page.screenshot(path=str(output / "ring-whole.png"), full_page=True)
 
+    # With the whole song playing, dragging someone off the stage sits them out of the section
+    # playing now and no other. Their spot on stage stays, so the rest of the song still hears them.
+    sat_out_before = page.evaluate(
+        "id => window.JUNK.snapshot().project.sections.filter(s => s.mutedIds.includes(id)).length",
+        extra,
+    )
+    position_before = page.evaluate(
+        "id => window.JUNK.snapshot().project.performers.find(p => p.id === id).position", extra
+    )
+    x, y, scale_x, scale_y = performer_point(page, extra)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 620 * scale_x, y + 10 * scale_y, steps=10)
+    page.mouse.up()
+    page.wait_for_function(
+        """data => window.JUNK.snapshot().project.sections
+          .filter(s => s.mutedIds.includes(data.id)).length === data.count + 1""",
+        arg={"id": extra, "count": sat_out_before},
+    )
+    page.wait_for_timeout(300)
+    assert (
+        page.evaluate(
+            "id => window.JUNK.snapshot().project.sections.filter(s => s.mutedIds.includes(id)).length",
+            extra,
+        )
+        == sat_out_before + 1
+    ), "Only the section playing now loses them"
+    assert (
+        page.evaluate(
+            "id => window.JUNK.snapshot().project.performers.find(p => p.id === id).position", extra
+        )
+        == position_before
+    ), "Sitting out of one section does not move them off stage for the song"
+
 
 def check_tempo_dial(page: Page, output: Path) -> None:
     layout = page.evaluate("window.JUNK.layout")
