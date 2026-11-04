@@ -117,14 +117,16 @@ function json(body: unknown): RequestInit {
 export const gateway = {
   health: async (): Promise<Health> =>
     healthSchema.parse(await request("/health")),
-  upload: async (file: File): Promise<Media> => {
+  upload: async (file: File, signal?: AbortSignal): Promise<Media> => {
     const data = new FormData();
     data.append("file", file);
     return mediaSchema.parse(
       await request("/media", {
         method: "POST",
         body: data,
-        signal: AbortSignal.timeout(120000),
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(120000)])
+          : AbortSignal.timeout(120000),
       })
     );
   },

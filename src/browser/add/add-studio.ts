@@ -50,6 +50,8 @@ export class AddStudio {
   private moment?: KeptMoment;
   private reached = new Set<Phase>(["bring"]);
   private busy = false;
+  private upload?: AbortController;
+  private startOverButton: HTMLButtonElement;
   private healthEpoch = 0;
 
   constructor(store: StudioStore) {
@@ -71,6 +73,16 @@ export class AddStudio {
     this.root.setAttribute("aria-label", "Add to the band");
     const header = element("header", "add-header");
     const closeButton = button("Close", () => this.close());
+    closeButton.title = "Hide Add; your progress is kept for next time.";
+    this.startOverButton = button(
+      "Start over",
+      () => this.startOver(),
+      "text-button"
+    );
+    this.startOverButton.title =
+      "Discard this source and everything made from it, then pick again.";
+    const actions = element("div", "add-actions");
+    actions.append(this.startOverButton, closeButton);
     for (const { id, label } of STEPS) {
       const item = element("li");
       const step = button(label, () => {
@@ -81,11 +93,7 @@ export class AddStudio {
       item.append(step);
       this.steps.append(item);
     }
-    header.append(
-      element("h2", "", "Find its voice."),
-      this.steps,
-      closeButton
-    );
+    header.append(element("h2", "", "Find its voice."), this.steps, actions);
     this.buildBring();
     const body = element("div", "add-body");
     body.append(
@@ -230,6 +238,23 @@ export class AddStudio {
     document.querySelector<HTMLCanvasElement>("#canvas")?.focus();
   }
 
+  /** Throw away the chosen source, stopping any upload, so a different one can be picked. */
+  startOver(): void {
+    this.upload?.abort();
+    this.upload = undefined;
+    this.busy = false;
+    this.pendingFile = undefined;
+    this.clip.pause();
+    this.review.reset();
+    if (this.source) URL.revokeObjectURL(this.source.url);
+    this.source = undefined;
+    this.moment = undefined;
+    this.reached = new Set(["bring"]);
+    this.status.textContent = "";
+    this.status.classList.remove("error");
+    this.setPhase("bring");
+  }
+
   async demo(): Promise<void> {
     this.show();
     const response = await fetch("/demo-source.mp4");
@@ -255,6 +280,7 @@ export class AddStudio {
     this.objects.root.hidden = phase !== "object";
     this.review.root.hidden = phase !== "review";
     this.steps.hidden = phase === "bring";
+    this.renderStartOver();
     if (phase !== "moment") this.clip.pause();
     if (phase !== "review") this.review.pause();
     for (const { id } of STEPS) {
@@ -265,6 +291,13 @@ export class AddStudio {
       if (id === phase) step.setAttribute("aria-current", "step");
       else step.removeAttribute("aria-current");
     }
+  }
+
+  private renderStartOver(): void {
+    const uploading = this.busy;
+    this.startOverButton.hidden =
+      !uploading && !this.source && !this.pendingFile;
+    this.startOverButton.textContent = uploading ? "Cancel" : "Start over";
   }
 
   private fail(message: string): void {
@@ -278,6 +311,7 @@ export class AddStudio {
     if (!ownClip && !this.rights.checked) {
       this.pendingFile = file;
       this.setPhase("bring");
+      this.renderStartOver();
       this.rightsField.hidden = false;
       this.status.textContent = `Tick the box above to open ${file.name}.`;
       return;
@@ -288,10 +322,13 @@ export class AddStudio {
       return;
     }
     this.busy = true;
+    const upload = new AbortController();
+    this.upload = upload;
     this.setPhase("bring");
     this.status.textContent = "Opening your source…";
     try {
-      const media = await gateway.upload(file);
+      const media = await gateway.upload(file, upload.signal);
+      if (upload.signal.aborted) return;
       if (!media.audio_present) {
         this.fail(
           "This source has no audio. Import a recording or video with an audible sound."
@@ -300,12 +337,18 @@ export class AddStudio {
       }
       this.pendingFile = undefined;
       await saveBlob(`source-${media.id}`, file);
+      if (upload.signal.aborted) return;
       this.acceptSource(file, media);
       this.status.textContent = "";
     } catch (error) {
+      if (upload.signal.aborted) return;
       this.fail(error instanceof Error ? error.message : String(error));
     } finally {
-      this.busy = false;
+      if (this.upload === upload) {
+        this.upload = undefined;
+        this.busy = false;
+        this.renderStartOver();
+      }
     }
   }
 

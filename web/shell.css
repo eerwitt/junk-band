@@ -1136,8 +1136,14 @@ p {
 .preview-time {
   font-variant-numeric: tabular-nums;
 }
-.add-header > button {
+.add-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin-left: auto;
+}
+.add-actions > [hidden] {
+  display: none;
 }
 .clip-hint {
   flex: 1 1 200px;
