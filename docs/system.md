@@ -21,8 +21,8 @@ Godot (`godot/`) owns the stage, puppets, shadows, pickup, path drawing, the rad
 
 - `subscribe(callback)` returns a subscription ID and sends an initial `state` packet. Later edits are coalesced to one notification per animation frame.
 - `command(json)` accepts schema-validated, allowlisted commands (transport, selection, performer patches, clone/add/remove/Undo, save/open/export, drawers). Unknown kinds and invalid values are rejected.
-- `frame()` returns one small JSON packet per frame: the Web Audio beat, playback state, master pulse, per-performer note envelopes from actual scheduled onsets, and `onsets` (the age in seconds and velocity of each performer's newest sounded hit, so overlapping fast hits are still seen one by one). The bridge caches it before other nodes run.
-- `state` packets carry project metadata, selection, playing/saved status, service mode and notices, never media bytes.
+- `frame()` returns one small JSON packet per frame: the beat, playback state, master pulse, per-performer note envelopes from actual scheduled onsets, and `onsets` (the age in seconds and velocity of each performer's newest sounded hit, so overlapping fast hits are still seen one by one). It is timed to what is leaving the speakers (`getOutputTimestamp()` carried forward on the frame clock), not `currentTime`, which steps once per audio callback and runs ahead by the output latency. The bridge caches it before other nodes run.
+- `state` packets carry project metadata, selection, playing/saved status, service mode and notices, never media bytes. `project` is left out when it has not changed since the last packet, and Godot only rebuilds the stage when it or the selection did.
 - `arrival` packets name a performer that just joined, with `kind` `new` (made in Add) or `clone` (with its `source`); `departure` packets name one being removed, sent before the state that drops it, so the stage can tell removal from unloading.
 - `texture` packets send an accepted PNG as base64 once per asset per subscription; clones share the decoded `ImageTexture`.
 - `publishLayout(json)` exposes control rectangles and FPS so browser checks can click real Godot controls. `metrics()` exposes scheduled-hit and voice counters.
@@ -37,7 +37,7 @@ Godot never schedules notes from `_process()` or a Timer; note envelopes and ons
 
 ## Persistence
 
-IndexedDB stores source and accepted blobs and autosaves validated project metadata. Older schemas upgrade on load (four-bar scenes repeat to sixteen bars, four sections become eight, and pre-base-band songs gain the band once). Portable bundles include accepted assets, so a fresh browser can restore and play them without the server. Undo keeps at most 30 snapshots.
+IndexedDB stores source and accepted blobs and autosaves validated project metadata. Older schemas upgrade on load (four-bar scenes repeat to sixteen bars, four sections become eight, and pre-base-band songs gain the band once). Portable bundles include accepted assets, so a fresh browser can restore and play them without the server. Undo keeps at most 30 snapshots; a run of volume, pitch or pan slider changes to one performer is a single step.
 
 ## Gateway
 

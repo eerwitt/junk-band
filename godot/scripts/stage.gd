@@ -62,6 +62,10 @@ var _section_zoom: float = 1.0
 var _scrub_origin: Vector2 = Vector2.ZERO
 var _scrub_moved: bool = false
 var _press_section: int = -1
+## The selected performer's drawn path, sampled once per scene change rather than every redraw.
+var _path_line := PackedVector2Array()
+var _path_line_id: String = ""
+var _path_line_stale: bool = true
 
 
 ## `kind` is "new" for a character just made, "clone" for a copy of `source`.
@@ -198,6 +202,7 @@ func apply_scene(project: Dictionary, selection: String) -> void:
 				leaving.queue_free()
 			_leaving.erase(id)
 	_place_wings()
+	_path_line_stale = true
 	queue_redraw()
 
 
@@ -752,6 +757,17 @@ func _gui_input(event: InputEvent) -> void:
 			queue_redraw()
 
 
+func _sample_path(id: String) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	for performer: Dictionary in performers:
+		if str(performer.id) != id or performer.get("path", []).size() <= 1: continue
+		var knots: Array = JunkMotionMath.closed_path(performer)
+		for index: int in range(257):
+			points.append(JunkMotionMath.path_position(knots, float(index) / 256 * JunkLoopTiming.BEATS))
+		break
+	return points
+
+
 ## While a tuned character is carried, the notes it can land on show across the stage.
 func _draw_note_rows() -> void:
 	if _drag_id.is_empty() or not _dragged_is_tuned(): return
@@ -772,12 +788,8 @@ func _selected_has_path() -> bool:
 
 ## A route in dashes timed in half beats, which march along it with the song so the
 ## direction and pace of travel can be read at a glance. A new route is inked in first.
-func _draw_route(performer: Dictionary) -> void:
-	var knots: Array = JunkMotionMath.closed_path(performer)
-	var samples: int = 256
-	var points: PackedVector2Array = []
-	for index: int in range(samples + 1):
-		points.append(JunkMotionMath.path_position(knots, float(index) / samples * JunkLoopTiming.BEATS))
+func _draw_route(points: PackedVector2Array) -> void:
+	var samples: int = points.size() - 1
 	var current: float = bridge.beat() if bridge != null else 0.0
 	var colour := Color(0.72, 0.40, 0.22, 0.55)
 	var per_beat: float = float(samples) / JunkLoopTiming.BEATS
@@ -789,7 +801,7 @@ func _draw_route(performer: Dictionary) -> void:
 		if (not on or index == samples) and dash.size() > 1:
 			draw_polyline(dash, colour, 2.0, true)
 		if not on: dash.clear()
-	if str(performer.id) == _ink_in_id and _ink_in_age < 0.9:
+	if selected_id == _ink_in_id and _ink_in_age < 0.9:
 		var sweep: float = smoothstep(0.0, 0.55, _ink_in_age)
 		var fade: float = 1.0 - smoothstep(0.55, 0.9, _ink_in_age)
 		var reach: int = maxi(2, int(sweep * samples))
@@ -810,12 +822,12 @@ func _draw() -> void:
 		var extent := Vector2(410, 250) * zoom
 		draw_texture_rect(_ground, Rect2(center - extent, extent * 2.0), false)
 	draw_set_transform(center, 0, Vector2.ONE * zoom)
-	for performer: Dictionary in performers:
-		if str(performer.id) != selected_id:
-			continue
-		var path: Array = performer.get("path", [])
-		if path.size() > 1:
-			_draw_route(performer)
+	if _path_line_stale or _path_line_id != selected_id:
+		_path_line = _sample_path(selected_id)
+		_path_line_id = selected_id
+		_path_line_stale = false
+	if _path_line.size() > 1:
+		_draw_route(_path_line)
 	if _path_points.size() > 1 and draw_path:
 		# Soft graphite: a light wide pass under a firmer core, and the pencil's tip.
 		draw_polyline(_path_points, Color(0.42, 0.40, 0.37, 0.22), 4.5, true)

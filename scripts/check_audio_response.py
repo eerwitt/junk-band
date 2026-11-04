@@ -2,6 +2,7 @@
 
 import argparse
 import json
+from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
@@ -51,10 +52,12 @@ def change_then_listen(page: Page, action: str) -> float:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="http://127.0.0.1:5182/")
+    parser.add_argument("--browser", type=Path, help="Optional installed Chromium executable")
     args = parser.parse_args()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=True,
+            executable_path=str(args.browser) if args.browser else None,
             args=[
                 "--use-gl=angle",
                 "--use-angle=swiftshader",

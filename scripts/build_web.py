@@ -28,6 +28,30 @@ def run(arguments: list[str], environment: dict[str, str]) -> str:
     return output
 
 
+def godot_profile(profile: Path, version: str) -> tuple[Path, Path, dict[str, str]]:
+    """Where this machine keeps export templates, where the isolated build profile keeps them,
+    and the environment that points Godot at that profile instead of the user's own."""
+    override = os.environ.get("GODOT_EXPORT_TEMPLATES")
+    if sys.platform == "win32":
+        installed = Path(os.environ.get("APPDATA", "")) / "Godot/export_templates" / version
+        local = profile / "Godot/export_templates" / version
+        isolated = {"APPDATA": str(profile), "LOCALAPPDATA": str(profile / "Local")}
+    elif sys.platform == "darwin":
+        # macOS has no variable to move Godot's data folder, so the build uses the real one.
+        installed = Path.home() / "Library/Application Support/Godot/export_templates" / version
+        local, isolated = installed, {}
+    else:
+        data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+        installed = data_home / "godot/export_templates" / version
+        local = profile / "data/godot/export_templates" / version
+        isolated = {
+            "XDG_DATA_HOME": str(profile / "data"),
+            "XDG_CONFIG_HOME": str(profile / "config"),
+            "XDG_CACHE_HOME": str(profile / "cache"),
+        }
+    return Path(override) if override else installed, local, isolated
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Build the Godot stage and native browser services without React or Vite"
@@ -58,17 +82,20 @@ def main() -> None:
     if not match:
         raise ValueError("Use a stable Godot build with matching web export templates")
     template_version = f"{match[1]}.{match[2]}"
-    template_root = (
-        Path(os.environ.get("APPDATA", "")) / "Godot/export_templates" / template_version
-    )
     profile = root / ".build/godot-profile"
-    local_templates = profile / "Godot/export_templates" / template_version
+    template_root, local_templates, isolated = godot_profile(profile, template_version)
     local_templates.mkdir(parents=True, exist_ok=True)
     for name in ("web_nothreads_release.zip", "web_nothreads_debug.zip"):
         if not (local_templates / name).exists():
-            shutil.copyfile(template_root / name, local_templates / name)
-    environment["APPDATA"] = str(profile)
-    environment["LOCALAPPDATA"] = str(profile / "Local")
+            source = template_root / name
+            if not source.exists():
+                raise FileNotFoundError(
+                    f"{source} is missing. Install the Godot {template_version} web export "
+                    "templates (on Linux: python scripts/install_godot.py), or point "
+                    "GODOT_EXPORT_TEMPLATES at the folder that holds them."
+                )
+            shutil.copyfile(source, local_templates / name)
+    environment.update(isolated)
     (root / "dist/engine").mkdir(parents=True, exist_ok=True)
     run(
         [args.godot, "--headless", "--path", "godot", "--editor", "--import", "--quit"], environment

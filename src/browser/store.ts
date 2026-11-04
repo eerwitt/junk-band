@@ -20,6 +20,9 @@ export interface StudioState {
   mode: string;
   notice: string;
 }
+/** Patches a slider sends many times a second. A run of them is one Undo step. */
+const LIVE_KEYS = new Set(["gainDb", "rate", "pan"]);
+const LIVE_RUN_MS = 800;
 export class StudioStore {
   constructor(
     private readonly onJoin: (
@@ -42,6 +45,7 @@ export class StudioStore {
   private listeners = new Set<() => void>();
   private saveTimer?: number;
   private revision = 0;
+  private liveRun?: { key: string; at: number };
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -69,13 +73,19 @@ export class StudioStore {
     Object.assign(this.state, patch);
     this.notify();
   }
-  edit(change: (project: Project) => void): void {
+  edit(change: (project: Project) => void, live?: string): void {
     const previous = this.state.project,
       next = structuredClone(previous);
     change(next);
     projectSchema.parse(next);
     if (JSON.stringify(previous) === JSON.stringify(next)) return;
-    this.history = [...this.history.slice(-29), previous];
+    const now = performance.now();
+    const continuing =
+      live !== undefined &&
+      this.liveRun?.key === live &&
+      now - this.liveRun.at < LIVE_RUN_MS;
+    if (!continuing) this.history = [...this.history.slice(-29), previous];
+    this.liveRun = live === undefined ? undefined : { key: live, at: now };
     this.state.project = next;
     this.changed();
   }
@@ -112,19 +122,27 @@ export class StudioStore {
     }
   }
   update(id: string, patch: Partial<Performer>): void {
-    this.edit((project) => {
-      const performer = project.performers.find((p) => p.id === id);
-      if (performer) Object.assign(performer, patch);
-    });
+    const keys = Object.keys(patch);
+    this.edit(
+      (project) => {
+        const performer = project.performers.find((p) => p.id === id);
+        if (performer) Object.assign(performer, patch);
+      },
+      keys.length && keys.every((key) => LIVE_KEYS.has(key))
+        ? `${id}:${keys.sort().join()}`
+        : undefined
+    );
   }
   replace(project: Project): void {
     const parsed = projectSchema.parse(project);
     this.history = [...this.history.slice(-29), this.state.project];
+    this.liveRun = undefined;
     this.state.project = parsed;
     this.changed();
   }
   undo(): void {
     const project = this.history.pop();
+    this.liveRun = undefined;
     if (project) {
       this.state.project = project;
       this.state.notice = "Back one move.";

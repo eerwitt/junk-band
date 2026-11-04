@@ -39,17 +39,28 @@ static func prepare(source: Texture2D, paper_rim: int = -1) -> Dictionary:
 	inner_mask.grow_mask(maxi(0, mask_rim - 1), Rect2i(Vector2i.ZERO, mask_size))
 	var contours: Array[PackedVector2Array] = mask.opaque_to_polygons(Rect2i(Vector2i.ZERO, mask_size), 0.65)
 	# Bake the stock under the print; preserve the original artwork's antialiasing.
-	var face := Image.create(mask_size.x, mask_size.y, false, Image.FORMAT_RGBA8)
 	var stock := Color("ead8b6")
+	var outer_gray: Image = _gray(mask)
+	# Painted with native blits rather than a per-texel script loop; the result is identical.
+	# Most of the time here goes to the two grow_mask calls above, not to painting.
+	var face := Image.create(mask_size.x, mask_size.y, false, Image.FORMAT_RGBA8)
 	# Colored transparent texels avoid a black fringe in filtered mip levels.
 	face.fill(Color(stock, 0.0))
+	var layer := Image.create(mask_size.x, mask_size.y, false, Image.FORMAT_RGBA8)
+	layer.fill(Color("b18a58"))
+	face.blit_rect_mask(layer, _alpha_mask(outer_gray), Rect2i(Vector2i.ZERO, mask_size), Vector2i.ZERO)
+	layer.fill(stock)
+	face.blit_rect_mask(layer, _alpha_mask(_gray(inner_mask)), Rect2i(Vector2i.ZERO, mask_size), Vector2i.ZERO)
+	# The shadow only needs the silhouette's mean and spread, so a sparse grid is plenty.
+	var bits: PackedByteArray = outer_gray.get_data()
+	var stride: int = maxi(1, floori(mini(mask_size.x, mask_size.y) / 96.0))
 	var mass: float = 0.0
 	var first_moment := Vector2.ZERO
 	var second_moment := Vector2.ZERO
-	for y: int in range(mask_size.y):
-		for x: int in range(mask_size.x):
-			if mask.get_bit(x, y):
-				face.set_pixel(x, y, stock if inner_mask.get_bit(x, y) else Color("b18a58"))
+	for y: int in range(stride >> 1, mask_size.y, stride):
+		var row: int = y * mask_size.x
+		for x: int in range(stride >> 1, mask_size.x, stride):
+			if bits[row + x] != 0:
 				var sample_point := Vector2(x + 0.5, y + 0.5) * Vector2(size) / Vector2(mask_size)
 				mass += 1.0
 				first_moment += sample_point
@@ -70,6 +81,22 @@ static func prepare(source: Texture2D, paper_rim: int = -1) -> Dictionary:
 	if _cache.size() >= CACHE_LIMIT: _cache.erase(_cache.keys()[0])
 	_cache[key] = result
 	return result
+
+
+## One byte per texel, 255 where the bit is set.
+static func _gray(bits: BitMap) -> Image:
+	var gray: Image = bits.convert_to_image()
+	if gray.get_format() != Image.FORMAT_L8: gray.convert(Image.FORMAT_L8)
+	return gray
+
+
+## The same coverage as alpha, for blit_rect_mask. Doubling the width by nearest neighbour
+## repeats every byte, and those pairs read back as luminance-alpha texels.
+static func _alpha_mask(gray: Image) -> Image:
+	var size: Vector2i = gray.get_size()
+	var doubled: Image = gray.duplicate()
+	doubled.resize(size.x * 2, size.y, Image.INTERPOLATE_NEAREST)
+	return Image.create_from_data(size.x, size.y, false, Image.FORMAT_LA8, doubled.get_data())
 
 
 static func _edge_mesh(contours: Array[PackedVector2Array], center: Vector2, contour_scale: Vector2, flute_scale: float) -> ArrayMesh:

@@ -244,6 +244,8 @@ func _on_packet(packet: Dictionary) -> void:
 
 
 func _apply_state(packet: Dictionary) -> void:
+	# The browser leaves the project out when only status changed (notices, saving, play).
+	var scene_changed: bool = packet.has("project") or str(packet.get("selected", selection)) != selection
 	project = packet.get("project", project)
 	selection = str(packet.get("selected", selection))
 	var was_playing: bool = playing
@@ -257,7 +259,7 @@ func _apply_state(packet: Dictionary) -> void:
 	stage.reduced_motion = bool(packet.get("reducedMotion", false))
 	_menu.reduced_motion = stage.reduced_motion
 	_menu._holes.reduced_motion = stage.reduced_motion
-	stage.apply_scene(project, selection)
+	if scene_changed: stage.apply_scene(project, selection)
 	if _menu.visible:
 		if selection != _menu.performer_id: _menu.close()
 		else: _menu.sync(_selected())

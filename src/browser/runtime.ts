@@ -66,6 +66,8 @@ export async function startRuntime(): Promise<JunkBridgeAPI> {
   const callbacks = new Map<number, (message: string) => void>();
   const textures = new Map<string, string>(),
     pendingTextures = new Set<string>();
+  // The project last sent to Godot. Edits always replace the object, so identity means unchanged.
+  let sentProject: unknown;
   let nextId = 0,
     animationFrame = 0,
     transportBusy = false,
@@ -186,7 +188,14 @@ export async function startRuntime(): Promise<JunkBridgeAPI> {
     if (animationFrame) return;
     animationFrame = requestAnimationFrame(() => {
       animationFrame = 0;
-      emit({ type: "state", ...store.state });
+      // Notices, saving and transport flips leave the stage as it is: no project to re-read.
+      const { project, ...status } = store.state;
+      emit(
+        project === sentProject
+          ? { type: "state", ...status }
+          : { type: "state", ...status, project }
+      );
+      sentProject = project;
       for (const asset of store.state.project.assets) {
         void texture(asset.id, asset.sprite).catch((error) =>
           store.notice(String(error))
