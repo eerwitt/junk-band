@@ -11,14 +11,14 @@ The stage is the primary artifact: a generous eggshell canvas holding a low, sun
 ## Stage and controls
 
 - Default framing leaves generous empty paper around the band. The playing area is a faint feathered gradient, with no outline, rings or ticks.
-- The loop cursor follows a quiet counterclockwise elliptical orbit. Hover thickens it and shows a grab cursor; dragging seeks the full sixteen bars.
+- The loop cursor follows a quiet counterclockwise elliptical orbit. Hover thickens it and shows a grab cursor; dragging seeks the whole thirty-two bars.
 - **The ring is the song**, in eight sections. Hover opens a shaded band with the section name in light curved lettering. Clicking zooms in 10% and loops the section; a pale outer band repeats the name and zooms back out.
 - Characters sitting a section out wait at full colour outside the ring; where one is moved there becomes its spot. They travel there with long bounds, a waddle, or a teetering run.
 - Below the ellipse sit only play/pause, the tempo metronome and Add: individually shadowed cardboard pieces with irregular ink edges, fixed to the viewport during camera navigation. A compact row beside the stage holds the help drawer and an icon-only WAV save.
 - Tempo is a cardboard metronome whose arm swings on the beat and whose weight slides with the value.
 - Camera: cursor-anchored wheel zoom 0.5×–4×, middle/right drag and trackpad gestures pan, Home resets. The world stays 2D orthographic.
 - Height on the stage is pitch for tuned characters, snapped to one pentatonic scale; faint note rows appear only while one is carried.
-- Rhythm lives on a card of sixteen holes: ready-made cards first, holes to fiddle with, tapping along to teach it. There is no note grid. Punching a hole knocks the card and drops a paper chad out of the back; changed holes ring, a new card ripples along, and a tap flashes the hole it lands on.
+- Rhythm lives on a card of sixteen holes a bar, one to eight bars long or the whole song, four rows in view with tabs that turn with the song: ready-made cards first, holes to fiddle with, tapping along to teach it. There is no note grid. Punching a hole knocks the card and drops a paper chad out of the back; changed holes ring, a new card ripples along, and a tap flashes the hole it lands on.
 
 ## Radial controls
 

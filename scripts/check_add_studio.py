@@ -303,6 +303,15 @@ def main() -> None:
         no_sideways_scroll(page)
         page.screenshot(path=str(args.output / "review-mobile.png"), full_page=True)
         page.set_viewport_size({"width": 1440, "height": 900})
+        # How it plays is chosen from the sound's length, and explained in a line.
+        styles = review.get_by_role("group", name="How it plays")
+        expect(styles).to_be_visible()
+        expect(review.locator(".review-style-note")).not_to_contain_text("Listening")
+        phrase = styles.get_by_role("button", name="Phrase", exact=True)
+        phrase.click()
+        expect(phrase).to_have_attribute("aria-pressed", "true")
+        expect(review.locator(".review-style-note")).to_contain_text("A phrase")
+        page.screenshot(path=str(args.output / "review-how-it-plays.png"))
         add.click()
         expect(studio).to_be_hidden()
         page.wait_for_function(
@@ -313,7 +322,11 @@ def main() -> None:
         assert asset["provenance"] == "mock candidate", asset["provenance"]
         assert asset["visualProvenance"] == "Fixture painting, not a model result"
         assert asset["sourceSprite"] != asset["sprite"], "The plain cutout is kept too"
-        assert 7.9 <= asset["endS"] - asset["startS"] <= 8.01
+        # The quiet ends are trimmed, and what is left is measured.
+        assert 0 < asset["lengthS"] <= 8.01, asset.get("lengthS")
+        assert abs(asset["endS"] - asset["startS"] - asset["lengthS"]) < 0.01
+        joined = page.evaluate("window.JUNK.snapshot().project.performers.at(-1)")
+        assert joined["mode"] == "phrase" and joined["cardBars"] in (1, 2, 4, 8), joined
 
         # Rights are remembered; a phone video keeps its upright shape.
         open_add(page)

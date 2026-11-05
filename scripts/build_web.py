@@ -116,6 +116,21 @@ def main() -> None:
     )
     if "Pickup regression passed" not in pickup_check:
         raise RuntimeError("Godot pickup regression did not complete")
+    card_check = run(
+        [
+            args.godot,
+            "--headless",
+            "--path",
+            "godot",
+            "--script",
+            "res://tests/card_test.gd",
+            "--quit-after",
+            "240",
+        ],
+        environment,
+    )
+    if "Card regression passed" not in card_check:
+        raise RuntimeError("Godot rhythm card regression did not complete")
     cardboard_check = run(
         [
             args.godot,

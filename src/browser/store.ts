@@ -2,7 +2,10 @@ import {
   starterProject,
   withBaseBand,
   makePerformer,
+  playShape,
   projectSchema,
+  tempoToFit,
+  type PlayStyle,
   type Asset,
   type Performer,
   type Project,
@@ -169,25 +172,44 @@ export class StudioStore {
     this.notice("A new friend. A different rhythm.");
     this.onJoin(clone.id, "clone", p.id);
   }
-  add(asset: Asset): void {
+  add(asset: Asset, style: PlayStyle = "hit"): void {
     if (this.state.project.performers.length >= 24) {
       this.notice("The stage is full.");
       return;
     }
+    const { bpm } = this.state.project;
+    const fit =
+      style === "loop" && asset.lengthS !== undefined
+        ? tempoToFit(asset.lengthS, bpm)
+        : undefined;
     const performer = makePerformer(
       asset,
       this.state.project.performers.length,
-      this.state.project.performers
+      this.state.project.performers,
+      playShape(fit || style !== "loop" ? style : "phrase", asset.lengthS, bpm)
     );
     this.state.selected = performer.id;
     this.edit((project) => {
       if (!project.assets.some((a) => a.id === asset.id))
         project.assets.push(asset);
       project.performers.push(performer);
+      if (fit) project.bpm = fit.bpm;
       for (const section of project.sections)
         if (section.kind === "solo") section.mutedIds.push(performer.id);
     });
-    this.notice(`${asset.label} joined the band.`);
+    const bars = (count: number): string =>
+      count === 1 ? "every bar" : `every ${count} bars`;
+    this.notice(
+      fit
+        ? `${asset.label} joined the band, and the band moved to ${Math.round(
+            fit.bpm
+          )} BPM so it loops ${bars(fit.bars)}.`
+        : performer.mode === "phrase"
+        ? `${asset.label} joined the band. It plays the whole sound ${bars(
+            performer.cardBars ?? 1
+          )}.`
+        : `${asset.label} joined the band.`
+    );
     this.onJoin(performer.id, "new");
   }
   remove(): void {

@@ -1,5 +1,5 @@
-import type { Performer, Project } from "./project";
-import { loopSteps } from "./timing";
+import type { Asset, Performer, Project } from "./project";
+import { cardBarsOf, loopSteps, stepsPerBar, type CardBars } from "./timing";
 import { sectionAt, sectionGain } from "./arrangement";
 export { loopBeats, loopBars, loopSteps } from "./timing";
 
@@ -7,24 +7,70 @@ export interface NoteEvent {
   step: number;
   performerId: string;
   velocity: number;
+  /** Steps until this note is cut short, for sounds that must never pile up on themselves. */
+  hold?: number;
 }
 export const wrap = (n: number, length = loopSteps): number =>
   ((n % length) + length) % length;
+
+/** How many bars a performer's rhythm card holds. */
+export function cardBarsFor(
+  p: Pick<Performer, "steps" | "cardBars">
+): CardBars {
+  return (p.cardBars as CardBars | undefined) ?? cardBarsOf(p.steps);
+}
+
+/** The first hole of each card: where a phrase starts again. */
+export function phraseStarts(p: Performer): number[] {
+  const period = cardBarsFor(p) * stepsPerBar;
+  return p.steps.filter(
+    (step, i) =>
+      i === 0 ||
+      Math.floor(p.steps[i - 1] / period) !== Math.floor(step / period)
+  );
+}
+
+/** The step where the card holding this step ends. */
+export function cardEnd(p: Performer, step: number): number {
+  const period = cardBarsFor(p) * stepsPerBar;
+  return (Math.floor(step / period) + 1) * period;
+}
+
+/**
+ * Your own recordings are often longer than the gap between their hits: a voice, a phrase, a
+ * few beats in a row. Like a sampler pad, each new hit cuts the last one off rather than piling
+ * on top of it. The base band's sounds are short and ring out as they always have.
+ */
+export function cutsItselfOff(p: Performer, asset: Asset | undefined): boolean {
+  return (
+    p.mode === "phrase" ||
+    (p.mode === "repeat_hits" &&
+      asset !== undefined &&
+      asset.provenance !== "base band" &&
+      asset.provenance !== "synthesized demo")
+  );
+}
+
 export function compileEvents(project: Project): NoteEvent[] {
   const solo = project.performers.some((p) => p.solo);
   return project.performers
     .flatMap((p) => {
       if (p.mute || (solo && !p.solo)) return [];
-      const steps = p.mode === "repeat_hits" ? p.steps : p.steps.slice(0, 1);
+      const steps =
+        p.mode === "repeat_hits"
+          ? p.steps
+          : p.mode === "phrase"
+          ? phraseStarts(p)
+          : p.steps.slice(0, 1);
       const counts = new Map<string, number>();
-      return [...new Set(steps)].flatMap((step) => {
+      const events = [...new Set(steps)].flatMap((step) => {
         const section = sectionAt(project, step / 4);
         const index = counts.get(section.id) ?? 0;
         counts.set(section.id, index + 1);
         if (
           (sectionGain(project, p.id, step / 4) === 0 &&
             p.mode !== "continuous_loop") ||
-          (section.kind === "bridge" && index % 2 === 1)
+          (section.kind === "bridge" && index % 2 === 1 && p.mode !== "phrase")
         )
           return [];
         return [
@@ -34,8 +80,23 @@ export function compileEvents(project: Project): NoteEvent[] {
             velocity:
               (step % 4 === 0 ? 1 : 0.78) *
               (section.kind === "bridge" ? 0.82 : 1),
-          },
+          } as NoteEvent,
         ];
+      });
+      if (
+        !cutsItselfOff(
+          p,
+          project.assets.find((a) => a.id === p.assetId)
+        )
+      )
+        return events;
+      // Each note holds until the next one sounds (round the end of the song), and a phrase
+      // never runs past the end of its card.
+      return events.map((event, i) => {
+        const next = events[i + 1]?.step ?? events[0].step + loopSteps;
+        const until =
+          p.mode === "phrase" ? Math.min(next, cardEnd(p, event.step)) : next;
+        return { ...event, hold: until - event.step };
       });
     })
     .sort(

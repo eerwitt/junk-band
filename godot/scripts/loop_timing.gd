@@ -2,6 +2,6 @@
 class_name JunkLoopTiming
 extends RefCounted
 
-const BARS: int = 16
-const BEATS: float = 64.0
-const STEPS: int = 256
+const BARS: int = 32
+const BEATS: float = 128.0
+const STEPS: int = 512

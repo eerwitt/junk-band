@@ -130,7 +130,8 @@ def check_ring_sections(page: Page, output: Path) -> None:
     project = page.evaluate("window.JUNK.snapshot().project")
     sections = project["sections"]
     assert len(sections) == 8, "A new song has eight sections"
-    middle = lambda index: (sections[index]["startBar"] + sections[index]["endBar"]) / 32  # noqa: E731
+    bars = page.evaluate("window.JUNK.layout.loopBeats") / 4
+    middle = lambda index: (sections[index]["startBar"] + sections[index]["endBar"]) / (2 * bars)  # noqa: E731
     ids = [p["id"] for p in project["performers"]]
 
     # Hovering opens out a shaded area with that section's name. Nothing changes yet.
@@ -149,16 +150,19 @@ def check_ring_sections(page: Page, output: Path) -> None:
     assert page.evaluate("window.JUNK.snapshot().playing") == was_playing, "It keeps playing"
     start, end = sections[3]["startBar"] * 4, sections[3]["endBar"] * 4
     page.wait_for_timeout(300)
+    # Long enough to hear the section come round at least once, at this tempo.
+    watch_ms = (end - start) * 60000 / project["bpm"] + 2500
     beats = page.evaluate(
-        """async () => {
+        """async (watch) => {
           const seen = [];
-          const until = performance.now() + 7000;
+          const until = performance.now() + watch;
           while (performance.now() < until) {
             seen.push(window.JUNK.beat());
             await new Promise((done) => setTimeout(done, 60));
           }
           return seen;
-        }"""
+        }""",
+        watch_ms,
     )
     assert min(beats) >= start - 0.05 and max(beats) <= end + 0.05, (
         start,
@@ -406,7 +410,7 @@ def check_rhythm_card_and_notes(page: Page, output: Path) -> None:
     page.wait_for_function(
         """() => {
           const p = window.JUNK.snapshot().project.performers.find(p => p.id === 'p-0');
-          return p.steps.length === 8 * 16 && p.steps.slice(0, 8).join() === '0,3,4,7,8,11,12,15';
+          return p.steps.length === 8 * 32 && p.steps.slice(0, 8).join() === '0,3,4,7,8,11,12,15';
         }"""
     )
     # Tapping a hole changes it.
@@ -418,10 +422,11 @@ def check_rhythm_card_and_notes(page: Page, output: Path) -> None:
         canvas["width"] / layout["viewport"]["x"],
         canvas["height"] / layout["viewport"]["y"],
     )
-    slot = (holes["w"] - 24) / 16
+    # Holes start after the bar numbers (18 px) on a one-bar card; rows are 25 px tall.
+    slot = (holes["w"] - 18 - 24) / 16
     page.mouse.click(
-        canvas["x"] + (holes["x"] + slot * 1.5) * ratio_x,
-        canvas["y"] + (holes["y"] + holes["h"] / 2) * ratio_y,
+        canvas["x"] + (holes["x"] + 18 + slot * 1.5) * ratio_x,
+        canvas["y"] + (holes["y"] + 12.5) * ratio_y,
     )
     page.wait_for_function(
         "window.JUNK.snapshot().project.performers.find(p => p.id === 'p-0').steps.includes(1)"
@@ -433,7 +438,7 @@ def check_rhythm_card_and_notes(page: Page, output: Path) -> None:
         "n => window.JUNK.snapshot().project.performers.find(p => p.id === 'p-0').steps.length !== n",
         arg=len(before),
     )
-    assert len(performer(page, "p-0")["steps"]) == 16, "One tap is one hit a bar"
+    assert len(performer(page, "p-0")["steps"]) == 32, "One tap is one hit a bar"
     # Closing the card gives the song back.
     click_control(page, "punch")
     page.wait_for_function("!window.JUNK.layout.controls.card_gallop.visible")
@@ -445,7 +450,21 @@ def check_rhythm_card_and_notes(page: Page, output: Path) -> None:
     assert spotlit(page) == "p-0"
     click_control(page, "card_steady")
     page.wait_for_function(
-        "window.JUNK.snapshot().project.performers.find(p => p.id === 'p-0').steps.length === 64"
+        "window.JUNK.snapshot().project.performers.find(p => p.id === 'p-0').steps.length === 128"
+    )
+    # A longer card repeats what it had, then each bar can be punched on its own.
+    click_control(page, "card_bars_4")
+    page.wait_for_function(
+        """() => {
+          const p = window.JUNK.snapshot().project.performers.find(p => p.id === 'p-0');
+          return p.cardBars === 4 && p.steps.length === 128;
+        }"""
+    )
+    page.wait_for_timeout(600)
+    page.screenshot(path=str(output / "rhythm-card-four-bars.png"), full_page=True)
+    click_control(page, "card_bars_1")
+    page.wait_for_function(
+        "window.JUNK.snapshot().project.performers.find(p => p.id === 'p-0').cardBars === 1"
     )
     # Switching on "height sets its note" is saved on the character.
     assert not performer(page, "p-0").get("tuned")
@@ -601,7 +620,7 @@ def main() -> None:
         )
         page.wait_for_function("window.JUNK.snapshot().playing && window.JUNK.metrics().hits > 4")
         assert page.evaluate("window.JUNK.metrics().voices") > 0
-        assert page.evaluate("window.JUNK.layout.loopBeats") == 64
+        assert page.evaluate("window.JUNK.layout.loopBeats") == 128
         page.wait_for_function(
             "Object.values(JSON.parse(window.JUNK.frame()).pulses).some(pulse=>pulse>0.2)"
         )
@@ -656,9 +675,13 @@ def main() -> None:
                 )
         page.mouse.up()
         page.wait_for_function("!window.JUNK.snapshot().playing")
-        page.wait_for_function("Math.abs(window.JUNK.beat() - 40) < 0.1")
+        page.wait_for_function(
+            "Math.abs(window.JUNK.beat() - window.JUNK.layout.loopBeats * 0.625) < 0.1"
+        )
         page.keyboard.press("ArrowRight")
-        page.wait_for_function("Math.abs(window.JUNK.beat() - 40.25) < 0.1")
+        page.wait_for_function(
+            "Math.abs(window.JUNK.beat() - window.JUNK.layout.loopBeats * 0.625 - 0.25) < 0.1"
+        )
         click_performer(page, "p-0")
         click_control(page, "draw_path")
         page.wait_for_function("window.JUNK.layout.pathDrawing")
@@ -672,7 +695,9 @@ def main() -> None:
             "window.JUNK.snapshot().project.performers.find(p=>p.id==='p-0').path.length > 8 && !window.JUNK.layout.pathDrawing"
         )
         page.keyboard.press("End")
-        page.wait_for_function("Math.abs(window.JUNK.beat() - 63.75) < 0.1")
+        page.wait_for_function(
+            "Math.abs(window.JUNK.beat() - (window.JUNK.layout.loopBeats - 0.25)) < 0.1"
+        )
         page.wait_for_timeout(450)
         page.screenshot(path=str(args.output / "motion-return.png"), full_page=True)
         click_performer(page, "p-0")

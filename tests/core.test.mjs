@@ -21,15 +21,33 @@ import {
   pathPosition,
 } from "../dist/modules/domain/motion.js";
 import {
+  loopBars,
   loopBeats,
   loopSteps,
   pulseAtAge,
+  cardBarsOf,
+  repeatCard,
 } from "../dist/modules/domain/timing.js";
 import {
   noteRow,
   playbackRate,
   rowSemitones,
 } from "../dist/modules/domain/pitch.js";
+
+/** Today's demo as it would have been saved when songs were sixteen bars (schema 3). */
+const sixteenBarSong = (version = 3) => {
+  const project = demoProject();
+  project.schemaVersion = version;
+  for (const p of project.performers) {
+    p.steps = p.steps.filter((step) => step < loopSteps / 2);
+    delete p.cardBars;
+  }
+  for (const s of project.sections) {
+    s.startBar /= 2;
+    s.endBar /= 2;
+  }
+  return project;
+};
 
 it("preserves off-stage drops and paths while rejecting non-finite coordinates", () => {
   const project = demoProject();
@@ -113,7 +131,7 @@ describe("musical contract", () => {
       assert.ok(project.assets.every((a) => a.audioId.startsWith("band-")));
       assert.ok(project.assets.every((a) => a.sprite.startsWith("/band/")));
       const events = compileEvents(project);
-      for (let bar = 0; bar < 16; bar++)
+      for (let bar = 0; bar < loopBars; bar++)
         assert.ok(
           events.some((e) => e.step >= bar * 16 && e.step < (bar + 1) * 16),
           `bar ${bar + 1} has something playing`
@@ -219,10 +237,10 @@ describe("musical contract", () => {
     };
     assert.ok(Math.abs(playbackRate(lifted, 0) - kick.rate * 2) < 1e-9);
   });
-  it("compiles sixteen populated bars with bounded events and swung offbeats", () => {
+  it("compiles every bar populated, with bounded events and swung offbeats", () => {
     const events = compileEvents(demoProject());
     assert.ok(events.length > 100);
-    for (let bar = 0; bar < 16; bar++)
+    for (let bar = 0; bar < loopBars; bar++)
       assert.ok(
         events.some((e) => e.step >= bar * 16 && e.step < (bar + 1) * 16),
         `bar ${bar + 1} has something playing`
@@ -240,7 +258,7 @@ describe("musical contract", () => {
       events.map((event) => event.step).sort((a, b) => a - b)
     );
     assert.equal(stepSeconds(64, 120, 0), 8);
-    assert.equal(stepSeconds(loopSteps, 120, 0), 32);
+    assert.equal(stepSeconds(loopSteps, 120, 0), loopBeats / 2);
     for (let quarter = 0; quarter < 4; quarter++)
       assert.ok(
         events.some(
@@ -279,8 +297,154 @@ describe("musical contract", () => {
     }
   });
   it("wraps and deduplicates transformed notes", () => {
-    assert.deepEqual(transformSteps([0, 254, 255], "offbeat_echo"), [0, 1, 2]);
-    assert.deepEqual(transformSteps([0, 255], "fill"), [0, 250, 253, 255]);
+    const last = loopSteps - 1;
+    assert.deepEqual(
+      transformSteps([0, last - 1, last], "offbeat_echo"),
+      [0, 1, 2]
+    );
+    assert.deepEqual(transformSteps([0, last], "fill"), [
+      0,
+      last - 5,
+      last - 2,
+      last,
+    ]);
+  });
+});
+describe("long songs, rhythm cards and phrases", () => {
+  it("plays a song saved at sixteen bars twice through, sounding the same bar for bar", () => {
+    const old = sixteenBarSong();
+    old.performers[0].path = [
+      { beat: 10, x: 120, y: -40 },
+      { beat: 40, x: -60, y: 90 },
+    ];
+    const upgraded = projectSchema.parse(structuredClone(old));
+    assert.equal(upgraded.schemaVersion, 4);
+    assert.equal(upgraded.sections.at(-1).endBar, loopBars);
+    assert.deepEqual(
+      upgraded.sections.map((s) => [s.startBar, s.endBar]),
+      old.sections.map((s) => [s.startBar * 2, s.endBar * 2])
+    );
+    for (const [i, p] of upgraded.performers.entries())
+      assert.deepEqual(
+        p.steps,
+        repeatCard(old.performers[i].steps, loopBars / 2)
+      );
+    const walker = upgraded.performers[0];
+    // It passes through the same points each time round; between them it may round off a touch.
+    for (const beat of [10, 40])
+      assert.deepEqual(
+        pathPosition(walker, beat + loopBeats / 2),
+        pathPosition(walker, beat)
+      );
+    for (const beat of [5, 25, 55]) {
+      const a = pathPosition(walker, beat),
+        b = pathPosition(walker, beat + loopBeats / 2);
+      assert.ok(Math.hypot(a.x - b.x, a.y - b.y) < 30, String(beat));
+    }
+    assert.deepEqual(pathPosition(walker, loopBeats / 2), walker.position);
+  });
+  it("reads a card's length from its pattern and repeats a card over the song", () => {
+    assert.equal(cardBarsOf(repeatCard([0, 4, 8, 12], 1)), 1);
+    assert.equal(cardBarsOf(repeatCard([0, 20], 2)), 2);
+    assert.equal(cardBarsOf(repeatCard([0, 60], 4)), 4);
+    assert.equal(cardBarsOf([14 + 16 * (loopBars - 1)]), loopBars);
+    assert.equal(cardBarsOf([]), 1);
+    assert.equal(repeatCard([0, 3], 8).length, (loopBars / 8) * 2);
+    const band = starterProject(3);
+    const bars = (key) =>
+      cardBarsOf(
+        band.performers.find((p) => p.assetId === `band-${key}`).steps
+      );
+    assert.equal(bars("kick"), 1);
+    assert.equal(bars("clap"), 2);
+    assert.equal(bars("snare"), 4, "The snare plays a fill every fourth bar");
+    assert.equal(bars("powerup"), 8);
+    assert.equal(bars("buzzer"), loopBars, "Game over, once, at the very end");
+  });
+  it("plays a phrase whole from the first hole of each card, never past the card", () => {
+    const project = demoProject();
+    const voice = project.performers[0];
+    project.performers = [voice];
+    for (const s of project.sections) s.mutedIds = [];
+    voice.mode = "phrase";
+    voice.cardBars = 2;
+    voice.steps = repeatCard([4, 8, 20], 2);
+    const events = compileEvents(project);
+    assert.deepEqual(
+      events.map((e) => e.step),
+      Array.from({ length: loopBars / 2 }, (_, card) => card * 32 + 4)
+    );
+    assert.ok(
+      events.every((e) => e.hold === 28),
+      "Held to the card's end"
+    );
+    setSectionKind(project, "section-1", "bridge");
+    assert.equal(compileEvents(project).length, loopBars / 2);
+  });
+  it("cuts your own long sounds off at their next hit, while the base band rings out", () => {
+    const project = starterProject(5);
+    const keys = project.performers.find((p) => p.assetId === "band-keys");
+    assert.ok(
+      compileEvents(project)
+        .filter((e) => e.performerId === keys.id)
+        .every((e) => e.hold === undefined)
+    );
+    const asset = {
+      id: "mine",
+      label: "My voice",
+      color: "#b37850",
+      sprite: "/sprites.png",
+      tile: 0,
+      audioId: "voice",
+      provenance: "raw import",
+      lengthS: 3,
+    };
+    project.assets.push(asset);
+    const voice = { ...makePerformer(asset, 1), steps: repeatCard([0, 8], 1) };
+    project.performers = [voice];
+    project.sections = project.sections.map((s) => ({ ...s, mutedIds: [] }));
+    const events = compileEvents(project);
+    assert.ok(events.every((e) => e.hold === 8));
+  });
+});
+describe("adding your own sounds", async () => {
+  const { tightBounds, boostFor } = await import(
+    "../dist/modules/audio/tighten.js"
+  );
+  const { phraseBars, suggestedStyle, tempoToFit, playShape } = await import(
+    "../dist/modules/domain/project.js"
+  );
+  it("trims the quiet before and after a sound, so hits land on time", () => {
+    const rate = 1000;
+    const samples = new Float32Array(3000);
+    for (let i = 500; i < 1500; i++) samples[i] = 0.5 * Math.sin(i);
+    samples[100] = 0.004; // room noise, well under the sound
+    const bounds = tightBounds([samples], rate);
+    assert.ok(Math.abs(bounds.startS - 0.495) < 0.01, String(bounds.startS));
+    assert.ok(bounds.endS > 1.49 && bounds.endS < 1.54, String(bounds.endS));
+    const silent = tightBounds([new Float32Array(100)], rate);
+    assert.equal(silent.endS, 0.1, "Silence is left as it is");
+    assert.ok(
+      Math.abs(boostFor(0.1) - 8) < 1e-9,
+      "Quiet sounds come up, but only so far"
+    );
+    assert.ok(Math.abs(boostFor(0.445) - 2) < 1e-9);
+  });
+  it("tells hits from phrases and fits loops to whole bars", () => {
+    assert.equal(suggestedStyle(0.4, 120), "hit");
+    assert.equal(suggestedStyle(3, 120), "phrase");
+    // At 120 BPM a bar is two seconds.
+    assert.equal(phraseBars(1.9, 120), 1);
+    assert.equal(phraseBars(3.5, 120), 2);
+    assert.equal(phraseBars(2.1, 120), 1, "A little spill is cut, not doubled");
+    assert.equal(phraseBars(30, 120), 8);
+    assert.deepEqual(tempoToFit(4, 112), { bpm: 120, bars: 2 });
+    assert.equal(tempoToFit(0.2, 112), undefined);
+    const loop = playShape("loop", 4, 112);
+    assert.equal(loop.mode, "phrase");
+    assert.equal(loop.cardBars, 2);
+    assert.deepEqual(loop.steps, repeatCard([0], 2));
+    assert.deepEqual(playShape("hit", 4, 112), {});
   });
 });
 describe("deterministic motion and persistence schema", () => {
@@ -327,18 +491,18 @@ describe("deterministic motion and persistence schema", () => {
     );
   });
   it("upgrades old four-bar scenes without losing their groove or assets", () => {
-    const legacy = demoProject();
-    legacy.schemaVersion = 1;
+    const legacy = sixteenBarSong(1);
+    delete legacy.sections;
     for (const p of legacy.performers)
       p.steps = p.steps.filter((step) => step < 64);
     const original = structuredClone(legacy);
     const upgraded = projectSchema.parse(legacy);
-    assert.equal(upgraded.schemaVersion, 3);
+    assert.equal(upgraded.schemaVersion, 4);
     assert.deepEqual(upgraded.assets, original.assets);
     for (let i = 0; i < 4; i++)
       assert.deepEqual(
         upgraded.performers[i].steps,
-        Array.from({ length: 4 }, (_, repeat) =>
+        Array.from({ length: loopSteps / 64 }, (_, repeat) =>
           original.performers[i].steps.map((step) => step + repeat * 64)
         ).flat()
       );
@@ -380,11 +544,11 @@ describe("song arrangement", () => {
     const project = demoProject(),
       original = structuredClone(project);
     const before = compileEvents(project).filter(
-      (e) => e.step >= 32 && e.step < 64
+      (e) => e.step >= 64 && e.step < 128
     );
     setSectionKind(project, "section-1", "bridge");
     const after = compileEvents(project).filter(
-      (e) => e.step >= 32 && e.step < 64
+      (e) => e.step >= 64 && e.step < 128
     );
     assert.ok(after.length < before.length && after.length > 0);
     assert.deepEqual(
@@ -392,8 +556,8 @@ describe("song arrangement", () => {
       original.performers.map((p) => p.steps)
     );
     assert.deepEqual(
-      compileEvents(project).filter((e) => e.step < 32),
-      compileEvents(original).filter((e) => e.step < 32)
+      compileEvents(project).filter((e) => e.step < 64),
+      compileEvents(original).filter((e) => e.step < 64)
     );
   });
   it("focuses a solo locally and lets backing parts rejoin quietly", () => {
@@ -401,25 +565,25 @@ describe("song arrangement", () => {
     setSectionKind(project, "section-2", "solo", "p-2");
     assert.ok(
       compileEvents(project)
-        .filter((e) => e.step >= 64 && e.step < 96)
+        .filter((e) => e.step >= 128 && e.step < 192)
         .every((e) => e.performerId === "p-2")
     );
-    assert.equal(sectionGain(project, "p-0", 17), 0);
-    assert.equal(sectionGain(project, "p-0", 9), 1);
+    assert.equal(sectionGain(project, "p-0", 34), 0);
+    assert.equal(sectionGain(project, "p-0", 18), 1);
     togglePart(project, "section-2", "p-0");
-    assert.equal(sectionGain(project, "p-0", 17), 0.55);
-    assert.equal(sectionGain(project, "p-2", 17), 1);
+    assert.equal(sectionGain(project, "p-0", 34), 0.55);
+    assert.equal(sectionGain(project, "p-2", 34), 1);
     assert.equal(projectSchema.safeParse(project).success, true);
   });
-  it("splits, resizes and joins without losing continuous sixteen-bar coverage", () => {
+  it("splits, resizes and joins without losing continuous coverage of the song", () => {
     const project = demoProject();
-    splitSection(project, "section-1", 3);
+    splitSection(project, "section-1", 6);
     assert.equal(project.sections.length, 9);
     resizeSection(project, "section-0", 1);
     assert.equal(project.sections[1].startBar, 1);
     joinNext(project, "section-0");
     assert.equal(project.sections.length, 8);
-    assert.equal(project.sections[0].endBar, 3);
+    assert.equal(project.sections[0].endBar, 6);
     assert.equal(projectSchema.safeParse(project).success, true);
     assert.throws(() => splitSection(project, "section-0", 0));
     project.sections[1].startBar = 5;
@@ -428,7 +592,7 @@ describe("song arrangement", () => {
   it("starts with eight sections and a band that comes and goes", () => {
     const project = demoProject();
     assert.equal(project.sections.length, 8);
-    assert.ok(project.sections.every((s) => s.endBar - s.startBar === 2));
+    assert.ok(project.sections.every((s) => s.endBar - s.startBar === 4));
     assert.ok(project.sections.some((s) => s.mutedIds.length > 0));
     assert.ok(project.sections.some((s) => s.mutedIds.length === 0));
     for (const s of project.sections)
@@ -438,8 +602,7 @@ describe("song arrangement", () => {
   });
   it("brings older four-section songs up to eight without losing edits", () => {
     const older = (sections) => ({
-      ...demoProject(),
-      schemaVersion: 2,
+      ...sixteenBarSong(2),
       sections,
     });
     const four = (mutedIds = []) =>
@@ -453,7 +616,7 @@ describe("song arrangement", () => {
         mutedIds: index === 1 ? mutedIds : [],
       }));
     const untouched = projectSchema.parse(older(four()));
-    assert.equal(untouched.schemaVersion, 3);
+    assert.equal(untouched.schemaVersion, 4);
     assert.equal(untouched.sections.length, 8);
     assert.ok(untouched.sections.some((s) => s.mutedIds.length));
     const edited = projectSchema.parse(older(four(["p-1"])));
@@ -463,13 +626,12 @@ describe("song arrangement", () => {
         .filter((s) => s.mutedIds.includes("p-1"))
         .map((s) => [s.startBar, s.endBar, s.label]),
       [
-        [4, 6, "B"],
-        [6, 8, "B II"],
+        [8, 12, "B"],
+        [12, 16, "B II"],
       ]
     );
     // Someone's own shape stays theirs.
-    const three = demoProject();
-    three.schemaVersion = 2;
+    const three = sixteenBarSong(2);
     three.sections = [
       { ...four()[0], endBar: 8 },
       { ...four()[2], startBar: 8, endBar: 12 },
@@ -491,11 +653,11 @@ describe("song arrangement", () => {
   it("sits a character out of one section and brings them back", () => {
     const project = demoProject();
     setPart(project, "section-3", "p-1", false);
-    assert.equal(sectionGain(project, "p-1", 13), 1);
-    assert.equal(sectionGain(project, "p-1", 25), 0);
+    assert.equal(sectionGain(project, "p-1", 26), 1);
+    assert.equal(sectionGain(project, "p-1", 50), 0);
     assert.ok(
       !compileEvents(project).some(
-        (e) => e.performerId === "p-1" && e.step >= 96 && e.step < 128
+        (e) => e.performerId === "p-1" && e.step >= 192 && e.step < 256
       )
     );
     setPart(project, "section-3", "p-1", false);
@@ -504,7 +666,7 @@ describe("song arrangement", () => {
       1
     );
     setPart(project, "section-3", "p-1", true);
-    assert.equal(sectionGain(project, "p-1", 25), 1);
+    assert.equal(sectionGain(project, "p-1", 50), 1);
     assert.throws(() => setPart(project, "nope", "p-1", true));
   });
   it("keeps sustained sources available to reopen after a muted section", () => {

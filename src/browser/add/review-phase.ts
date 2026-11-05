@@ -6,7 +6,14 @@ import {
   type Media,
 } from "../../services/gateway";
 import { saveBlob } from "../../storage/database";
-import type { Rig } from "../../domain/project";
+import {
+  phraseBars,
+  suggestedStyle,
+  tempoToFit,
+  type PlayStyle,
+  type Rig,
+} from "../../domain/project";
+import { tighten, tightBounds } from "../../audio/tighten";
 import { button, element, setBlocked } from "../dom";
 import { PaperWait, type WaitNote, type WaitView } from "../paper-wait";
 import type { StudioStore } from "../store";
@@ -33,6 +40,7 @@ const PAINT_NOTES: readonly WaitNote[] = [
   [45, "Still painting. You can add the cutout right now."],
 ];
 const MISSED_POLLS_ALLOWED = 4;
+const STYLES: readonly PlayStyle[] = ["hit", "phrase", "loop"];
 const WAVE_BARS = 96;
 
 export interface ReviewSource {
@@ -58,10 +66,10 @@ const queueLine = (ahead: number): string =>
 const message = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-/** Two A/B choices, look and sound, made while the work arrives. */
+/** The choices made while the work arrives: look, sound, and how it plays. */
 function choice(
   label: string,
-  options: readonly [string, string],
+  options: readonly string[],
   pick: (index: number) => void
 ): { root: HTMLElement; buttons: HTMLButtonElement[] } {
   const root = element("div", "review-choice");
@@ -108,6 +116,16 @@ export class ReviewPhase {
   private sounds = choice("Sound", ["Separated", "Original clip"], (index) =>
     this.chooseSound(index ? "original" : "separated", true)
   );
+  private styles = choice(
+    "How it plays",
+    ["Hit", "Phrase", "Loop"],
+    (index) => {
+      this.style = STYLES[index];
+      this.pickedStyle = true;
+      this.render();
+    }
+  );
+  private styleNote = element("p", "fine review-style-note");
   private status = element("p", "feedback");
   private addButton = button("Add to band", () => void this.add(), "primary");
   private source?: ReviewSource;
@@ -131,6 +149,10 @@ export class ReviewPhase {
   private pickedSound = false;
   private players: Partial<Record<Sound, HTMLAudioElement>> = {};
   private waves: Partial<Record<Sound, Float32Array>> = {};
+  /** Seconds of sound in each, once its quiet ends are left off. */
+  private lengths: Partial<Record<Sound, number>> = {};
+  private style: PlayStyle = "hit";
+  private pickedStyle = false;
   private playing = false;
   private adding = false;
   private soundEpoch = 0;
@@ -166,11 +188,15 @@ export class ReviewPhase {
     const soundNotes = element("div", "review-notes");
     soundNotes.append(this.soundNote, this.soundRetry);
     const soundPanel = element("div", "review-panel review-sound");
+    const styleHead = element("h4", "review-style-head", "How it plays");
     soundPanel.append(
       element("h3", "", "Its sound"),
       this.soundStage,
       this.sounds.root,
-      soundNotes
+      soundNotes,
+      styleHead,
+      this.styles.root,
+      this.styleNote
     );
     const panels = element("div", "review-panels");
     panels.append(this.lookPanel, soundPanel);
@@ -200,6 +226,7 @@ export class ReviewPhase {
     this.cutout = undefined;
     this.character = undefined;
     this.cutting = this.painting = false;
+    this.pickedStyle = false;
     this.soundWait.hide();
     this.lookWait.hide();
     this.paintWait.hide();
@@ -379,6 +406,7 @@ export class ReviewPhase {
     if (old && this.sound === which) this.playing = false;
     delete this.players[which];
     delete this.waves[which];
+    delete this.lengths[which];
     if (!url) return;
     const player = element("audio");
     player.preload = "auto";
@@ -411,7 +439,10 @@ export class ReviewPhase {
         bars[bar] = peak;
       }
       this.waves[which] = bars;
+      const tight = tightBounds([samples], decoded.sampleRate);
+      this.lengths[which] = tight.endS - tight.startS;
       this.drawWave();
+      this.render();
     } catch {
       // The sound still plays without its picture.
     }
@@ -772,6 +803,7 @@ export class ReviewPhase {
     this.soundNote.classList.toggle("error", Boolean(this.soundProblem));
     this.soundRetry.hidden =
       !this.soundProblem || Boolean(this.service && !this.service.audio);
+    this.renderStyle();
 
     const wait = this.adding ? "Adding to the band…" : "";
     setBlocked(
@@ -789,6 +821,44 @@ export class ReviewPhase {
     this.renderTransport();
   }
 
+  /** How it will play, from the length of the sound it would add, explained in a line. */
+  private renderStyle(): void {
+    const lengthS = this.lengths[this.sound];
+    const bpm = this.store.state.project.bpm;
+    const fit = lengthS === undefined ? undefined : tempoToFit(lengthS, bpm);
+    if (lengthS !== undefined && !this.pickedStyle)
+      this.style = suggestedStyle(lengthS, bpm);
+    if (this.style === "loop" && lengthS !== undefined && !fit)
+      this.style = "phrase";
+    this.styles.buttons.forEach((choice, index) => {
+      choice.setAttribute("aria-pressed", String(STYLES[index] === this.style));
+    });
+    setBlocked(
+      this.styles.buttons[2],
+      lengthS === undefined || fit
+        ? ""
+        : "Too short or too long to loop at any tempo the band can play."
+    );
+    const bars = (count: number): string =>
+      count === 1 ? "every bar" : `every ${count} bars`;
+    this.styleNote.textContent =
+      lengthS === undefined
+        ? "Listening to how long it is…"
+        : this.style === "hit"
+        ? `A hit: ${lengthS.toFixed(
+            1
+          )} s of sound, on a rhythm card. Each hit cuts the last one short.`
+        : this.style === "phrase"
+        ? `A phrase: all ${lengthS.toFixed(1)} s, once ${bars(
+            phraseBars(lengthS, bpm)
+          )}, never on top of itself. Good for voices.`
+        : `A loop: the band moves to ${Math.round(
+            fit!.bpm
+          )} BPM so it comes round ${bars(
+            fit!.bars
+          )} without a gap. Good for beats you played.`;
+  }
+
   private async add(): Promise<void> {
     const source = this.source;
     if (!source || this.adding) return;
@@ -801,7 +871,9 @@ export class ReviewPhase {
         ? `/media/${source.media.id}/audio?start_s=${this.start}&end_s=${this.end}`
         : this.job?.target_url;
       if (!path) throw new Error("Its sound is not ready yet.");
-      await saveBlob(id, await gateway.blob(path));
+      // Quiet before the sound would make every hit late, so it is trimmed off.
+      const sound = await tighten(await gateway.blob(path));
+      await saveBlob(id, sound.blob);
       const cutout = this.cutout;
       const styled = this.look === "painted" ? this.painted() : undefined;
       let sprite = "/sprites.png";
@@ -822,31 +894,43 @@ export class ReviewPhase {
           rig = await this.saveRig(id);
         }
       }
-      this.store.add({
-        id,
-        label: this.name(),
-        color: "#b37850",
-        sprite,
-        ...(rig ? { rig } : {}),
-        ...(cutout ? {} : { tile: 0 }),
-        audioId: id,
-        provenance: original
-          ? "raw import"
-          : this.job?.provenance === "SAM Audio"
-          ? "SAM Audio"
-          : "mock candidate",
-        sourceId: source.media.id,
-        startS: this.start,
-        endS: this.end,
-        ...(sourceSprite && cutout
-          ? {
-              sourceSprite,
-              visualProvenance: styled
-                ? this.character!.provenance
-                : `Cut out from the source frame on white paper · ${cutout.provenance}`,
-            }
-          : {}),
-      });
+      // A style picked before its length was known is checked against the trimmed sound.
+      const style =
+        this.pickedStyle || sound.lengthS === undefined
+          ? this.style
+          : suggestedStyle(sound.lengthS, this.store.state.project.bpm);
+      this.store.add(
+        {
+          id,
+          label: this.name(),
+          color: "#b37850",
+          sprite,
+          ...(rig ? { rig } : {}),
+          ...(cutout ? {} : { tile: 0 }),
+          audioId: id,
+          provenance: original
+            ? "raw import"
+            : this.job?.provenance === "SAM Audio"
+            ? "SAM Audio"
+            : "mock candidate",
+          sourceId: source.media.id,
+          startS: this.start + sound.leadS,
+          endS:
+            sound.lengthS === undefined
+              ? this.end
+              : Math.min(this.end, this.start + sound.leadS + sound.lengthS),
+          ...(sound.lengthS === undefined ? {} : { lengthS: sound.lengthS }),
+          ...(sourceSprite && cutout
+            ? {
+                sourceSprite,
+                visualProvenance: styled
+                  ? this.character!.provenance
+                  : `Cut out from the source frame on white paper · ${cutout.provenance}`,
+              }
+            : {}),
+        },
+        style
+      );
       // Anything still running was chosen against, so its later result is no longer news.
       this.reset();
       this.source = undefined;

@@ -6,7 +6,7 @@ func _initialize() -> void:
 
 
 func _run() -> void:
-	assert(JunkLoopTiming.BARS == 16 and JunkLoopTiming.STEPS == 256)
+	assert(JunkLoopTiming.BARS == 32 and JunkLoopTiming.STEPS == 512)
 	var stage := JunkStage.new()
 	root.add_child(stage)
 	stage.position = Vector2(45, 35)
@@ -92,9 +92,9 @@ func _run() -> void:
 	stage.apply_scene(project, "test")
 	var knots: Array = puppet.path_knots
 	assert(JunkMotionMath.path_position(knots, 0).distance_to(destination) < 0.001)
-	assert(JunkMotionMath.path_position(knots, 64).distance_to(destination) < 0.001)
-	assert(JunkMotionMath.path_position(knots, 63.999).distance_to(destination) < 0.001, "The closed path returns home before the wrap")
-	var seam_velocity: Vector2 = (JunkMotionMath.path_position(knots, 63.99) - JunkMotionMath.path_position(knots, 63.98)) / 0.01
+	assert(JunkMotionMath.path_position(knots, JunkLoopTiming.BEATS).distance_to(destination) < 0.001)
+	assert(JunkMotionMath.path_position(knots, JunkLoopTiming.BEATS - 0.001).distance_to(destination) < 0.001, "The closed path returns home before the wrap")
+	var seam_velocity: Vector2 = (JunkMotionMath.path_position(knots, JunkLoopTiming.BEATS - 0.01) - JunkMotionMath.path_position(knots, JunkLoopTiming.BEATS - 0.02)) / 0.01
 	assert(seam_velocity.length() < 0.4, "Return should settle gently at the seam within Vector2 precision")
 	var low: Array[Vector2] = [Vector2.ZERO, Vector2.ZERO]
 	var high: Array[Vector2] = [Vector2.ZERO, Vector2.ZERO]

@@ -1385,3 +1385,12 @@ li {
     max-width: 95vw;
   }
 }
+/* How a new sound plays: a hit, a phrase, or a loop the band follows. */
+.review-style-head {
+  margin: 12px 0 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.review-style-note {
+  margin: 4px 0 0;
+}

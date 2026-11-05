@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { loopBeats, loopSteps } from "./timing";
+import {
+  CARD_BARS,
+  loopBars,
+  loopBeats,
+  loopSteps,
+  repeatCard,
+  stepsPerBar,
+} from "./timing";
 
 export const motionSchema = z.enum(["still", "hop", "dance", "roll", "glide"]);
 export type Motion = z.infer<typeof motionSchema>;
@@ -52,6 +59,8 @@ export const assetSchema = z.object({
   visualProvenance: z.string().max(200).optional(),
   characterPrompt: z.string().max(300).optional(),
   rig: rigSchema.optional(),
+  /** Seconds of sound once its quiet ends are trimmed, to tell a hit from a phrase. */
+  lengthS: z.number().positive().max(60).optional(),
 });
 export type Asset = z.infer<typeof assetSchema>;
 export const performerSchema = z.object({
@@ -79,7 +88,19 @@ export const performerSchema = z.object({
   tuned: z.boolean().optional(),
   /** Where they wait outside the ring, once someone has put them there by hand. */
   wing: pointSchema.optional(),
-  mode: z.enum(["repeat_hits", "one_shot", "continuous_loop"]),
+  /**
+   * Pattern hits sound at every hole. A phrase plays the whole sound from the first hole of each
+   * card until the card ends. One shot plays once per song, and a sample loop loops freely.
+   */
+  mode: z.enum(["repeat_hits", "phrase", "one_shot", "continuous_loop"]),
+  /** How many bars its rhythm card holds before repeating. Unset, it is read from the steps. */
+  cardBars: z
+    .number()
+    .int()
+    .refine((bars) => (CARD_BARS as readonly number[]).includes(bars), {
+      message: "A rhythm card is 1, 2, 4 or 8 bars, or the whole song.",
+    })
+    .optional(),
   path: z
     .array(
       z.object({ beat: z.number().min(0).max(loopBeats), ...pointSchema.shape })
@@ -91,14 +112,20 @@ export type Performer = z.infer<typeof performerSchema>;
 export const sectionSchema = z.object({
   id: z.string().min(1).max(100),
   label: z.string().trim().min(1).max(48),
-  startBar: z.number().int().min(0).max(15),
-  endBar: z.number().int().min(1).max(16),
+  startBar: z
+    .number()
+    .int()
+    .min(0)
+    .max(loopBars - 1),
+  endBar: z.number().int().min(1).max(loopBars),
   kind: z.enum(["groove", "bridge", "solo"]),
   leadId: z.string().nullable(),
   mutedIds: z.array(z.string()).max(24),
 });
 export type SongSection = z.infer<typeof sectionSchema>;
-const SECTION_BARS = 2;
+const SECTION_BARS = 4;
+/** Section length in songs from before the song was thirty-two bars. */
+const OLD_SECTION_BARS = 2;
 const SECTION_LABELS = [
   "Intro",
   "Verse",
@@ -120,12 +147,15 @@ const SECTION_CAST: readonly ((index: number, size: number) => boolean)[] = [
   (index) => index !== 1,
   () => true,
 ];
-export function defaultSections(performerIds: string[] = []): SongSection[] {
+export function defaultSections(
+  performerIds: string[] = [],
+  bars: number = SECTION_BARS
+): SongSection[] {
   return SECTION_LABELS.map((label, index) => ({
     id: `section-${index}`,
     label,
-    startBar: index * SECTION_BARS,
-    endBar: (index + 1) * SECTION_BARS,
+    startBar: index * bars,
+    endBar: (index + 1) * bars,
     kind: "groove",
     leadId: null,
     mutedIds:
@@ -154,20 +184,94 @@ function expandToEight(sections: unknown, performers: unknown): unknown {
         .array(z.object({ id: z.string() }).loose())
         .catch([])
         .parse(performers)
-        .map((p) => p.id)
+        .map((p) => p.id),
+      OLD_SECTION_BARS
     );
   return parsed.data.flatMap((s) => [
-    { ...s, endBar: s.startBar + SECTION_BARS },
+    { ...s, endBar: s.startBar + OLD_SECTION_BARS },
     {
       ...s,
       id: `${s.id}-b`,
       label: `${s.label} II`.slice(0, 48),
-      startBar: s.startBar + SECTION_BARS,
+      startBar: s.startBar + OLD_SECTION_BARS,
     },
   ]);
 }
+const OLD_BEATS = loopBeats / 2;
+const OLD_STEPS = loopSteps / 2;
+const oldPerformerSchema = z
+  .object({
+    steps: z.array(z.number()),
+    position: pointSchema,
+    path: z.array(z.object({ beat: z.number(), ...pointSchema.shape })),
+  })
+  .loose();
+const oldSectionSchema = z
+  .object({ startBar: z.number(), endBar: z.number() })
+  .loose();
+/**
+ * A path from a sixteen-bar song, walked twice. The old song closed its path at home on its last
+ * beat, so that return home stays in the middle and the walk is as quick as it was.
+ */
+function walkTwice(
+  path: z.infer<typeof oldPerformerSchema>["path"],
+  home: { x: number; y: number }
+): z.infer<typeof oldPerformerSchema>["path"] {
+  const last = path.at(-1)?.beat ?? 0;
+  const scale = last > OLD_BEATS - 4 ? (OLD_BEATS - 4) / last : 1;
+  const knots = path
+    .filter((k) => k.beat > 0)
+    .map((k) => ({ ...k, beat: k.beat * scale }));
+  if (!knots.length) return [];
+  if (knots.length * 2 + 1 > 128)
+    return knots.map((k) => ({ ...k, beat: k.beat * 2 }));
+  return [
+    ...knots,
+    { beat: OLD_BEATS, ...home },
+    ...knots.map((k) => ({ ...k, beat: k.beat + OLD_BEATS })),
+  ];
+}
+/**
+ * Sixteen-bar songs become thirty-two: every section lasts twice as long, and each pattern and
+ * path plays through twice, so nothing sounds different bar to bar.
+ */
+function toThirtyTwoBars(value: object): object {
+  const song = value as { performers?: unknown; sections?: unknown };
+  const performers = Array.isArray(song.performers)
+    ? song.performers.map((p: unknown) => {
+        const old = oldPerformerSchema.safeParse(p);
+        if (!old.success) return p;
+        return {
+          ...old.data,
+          steps: [
+            ...old.data.steps,
+            ...old.data.steps.map((s) => s + OLD_STEPS),
+          ],
+          path: walkTwice(old.data.path, old.data.position),
+        };
+      })
+    : song.performers;
+  const sections = Array.isArray(song.sections)
+    ? song.sections.map((s: unknown) => {
+        const old = oldSectionSchema.safeParse(s);
+        return old.success
+          ? {
+              ...old.data,
+              startBar: old.data.startBar * 2,
+              endBar: old.data.endBar * 2,
+            }
+          : s;
+      })
+    : song.sections;
+  return {
+    ...value,
+    schemaVersion: 4,
+    ...(song.performers === undefined ? {} : { performers }),
+    ...(song.sections === undefined ? {} : { sections }),
+  };
+}
 const projectDataSchema = z.object({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.literal(4),
   /** Set once the base band has joined, so removing its members keeps them removed. */
   baseBandVersion: z.number().int().optional(),
   title: z.string().min(1).max(80),
@@ -197,39 +301,49 @@ const legacyProjectSchema = projectDataSchema.extend({
     )
     .max(24),
 });
+/** Any older song as a sixteen-bar, eight-section one (schema 3), or unchanged if it is not one. */
+function toSchemaThree(value: object): object {
+  if (!("schemaVersion" in value)) return value;
+  if (value.schemaVersion === 2) {
+    const older = value as { sections?: unknown; performers?: unknown };
+    return {
+      ...value,
+      schemaVersion: 3,
+      ...(older.sections === undefined
+        ? {}
+        : { sections: expandToEight(older.sections, older.performers) }),
+    };
+  }
+  if (value.schemaVersion !== 1) return value;
+  const legacy = legacyProjectSchema.safeParse(value);
+  if (!legacy.success) return value;
+  const sections = (value as { sections?: unknown }).sections;
+  const data: Partial<typeof legacy.data> = { ...legacy.data };
+  delete data.sections;
+  return {
+    ...data,
+    schemaVersion: 3,
+    ...(sections === undefined
+      ? {}
+      : { sections: expandToEight(sections, legacy.data.performers) }),
+    performers: legacy.data.performers.map((p) => ({
+      ...p,
+      steps: Array.from({ length: 4 }, (_, bar) =>
+        p.steps.map((step) => step + bar * 64)
+      ).flat(),
+      path: p.path.map((point) => ({ ...point, beat: point.beat * 4 })),
+      position:
+        p.path[0]?.beat === 0 ? { x: p.path[0].x, y: p.path[0].y } : p.position,
+    })),
+  };
+}
 export const projectSchema = z.preprocess(
   (value) => {
-    if (!value || typeof value !== "object" || !("schemaVersion" in value))
-      return value;
-    if (value.schemaVersion === 2) {
-      const older = value as { sections?: unknown; performers?: unknown };
-      return {
-        ...value,
-        schemaVersion: 3,
-        ...(older.sections === undefined
-          ? {}
-          : { sections: expandToEight(older.sections, older.performers) }),
-      };
-    }
-    if (value.schemaVersion !== 1) return value;
-    const legacy = legacyProjectSchema.safeParse(value);
-    if (!legacy.success) return value;
-    return {
-      ...legacy.data,
-      schemaVersion: 3,
-      sections: expandToEight(legacy.data.sections, legacy.data.performers),
-      performers: legacy.data.performers.map((p) => ({
-        ...p,
-        steps: Array.from({ length: 4 }, (_, bar) =>
-          p.steps.map((step) => step + bar * 64)
-        ).flat(),
-        path: p.path.map((point) => ({ ...point, beat: point.beat * 4 })),
-        position:
-          p.path[0]?.beat === 0
-            ? { x: p.path[0].x, y: p.path[0].y }
-            : p.position,
-      })),
-    };
+    if (!value || typeof value !== "object") return value;
+    const three = toSchemaThree(value);
+    return "schemaVersion" in three && three.schemaVersion === 3
+      ? toThirtyTwoBars(three)
+      : three;
   },
   projectDataSchema.superRefine((project, ctx) => {
     const assets = new Set(project.assets.map((a) => a.id));
@@ -238,7 +352,7 @@ export const projectSchema = z.preprocess(
       new Set(project.sections.map((s) => s.id)).size !==
         project.sections.length ||
       project.sections[0].startBar !== 0 ||
-      project.sections.at(-1)!.endBar !== 16 ||
+      project.sections.at(-1)!.endBar !== loopBars ||
       project.sections.some(
         (s, i) =>
           s.endBar <= s.startBar ||
@@ -252,7 +366,7 @@ export const projectSchema = z.preprocess(
       ctx.addIssue({
         code: "custom",
         message:
-          "Song sections must cover all sixteen bars in order and reference existing characters.",
+          "Song sections must cover every bar of the song in order and reference existing characters.",
       });
     }
     if (
@@ -285,10 +399,63 @@ export const projectSchema = z.preprocess(
 );
 export type Project = z.infer<typeof projectSchema>;
 
+/**
+ * How a new sound joins the band. A hit plays on a rhythm. A phrase (a voice, a tune, a few
+ * beats recorded in a row) plays whole, once every card. A loop is a phrase the band changes
+ * tempo for, so it fills its bars exactly and comes round without a gap.
+ */
+export type PlayStyle = "hit" | "phrase" | "loop";
+const PHRASE_BARS = [1, 2, 4, 8] as const;
+/** A phrase may run this much past its card, cut off cleanly, rather than take twice the bars. */
+const PHRASE_SPILL = 0.92;
+const TEMPO = { min: 80, max: 160 } as const;
+
+const beatsOf = (lengthS: number, bpm: number): number => (lengthS * bpm) / 60;
+
+/** The card a phrase of this length needs: whole bars, and room for all of it. */
+export function phraseBars(lengthS: number, bpm: number): number {
+  const beats = beatsOf(lengthS, bpm) * PHRASE_SPILL;
+  return PHRASE_BARS.find((bars) => bars * 4 >= beats) ?? 8;
+}
+
+/** Short sounds are hits; anything longer than a beat and a half is a phrase. */
+export function suggestedStyle(lengthS: number, bpm: number): PlayStyle {
+  return beatsOf(lengthS, bpm) > 1.5 ? "phrase" : "hit";
+}
+
+/**
+ * The tempo, nearest the one playing, at which this sound lasts exactly a whole card. None
+ * fits when it is too short or too long for any tempo the band can play.
+ */
+export function tempoToFit(
+  lengthS: number,
+  bpm: number
+): { bpm: number; bars: number } | undefined {
+  return PHRASE_BARS.map((bars) => ({
+    bars,
+    bpm: Math.round(((bars * 4 * 60) / lengthS) * 100) / 100,
+  }))
+    .filter((fit) => fit.bpm >= TEMPO.min && fit.bpm <= TEMPO.max)
+    .sort((a, b) => Math.abs(a.bpm - bpm) - Math.abs(b.bpm - bpm))[0];
+}
+
+/** The rhythm card a new sound starts with, for how it plays. A hit keeps the usual one. */
+export function playShape(
+  style: PlayStyle,
+  lengthS: number | undefined,
+  bpm: number
+): Partial<Pick<Performer, "mode" | "steps" | "cardBars">> {
+  if (style === "hit" || lengthS === undefined) return {};
+  const fit = style === "loop" ? tempoToFit(lengthS, bpm) : undefined;
+  const bars = fit?.bars ?? phraseBars(lengthS, bpm);
+  return { mode: "phrase", cardBars: bars, steps: repeatCard([0], bars) };
+}
+
 export function makePerformer(
   asset: Asset,
   index: number,
-  occupied: Pick<Performer, "position">[] = []
+  occupied: Pick<Performer, "position">[] = [],
+  shape: Partial<Pick<Performer, "mode" | "steps" | "cardBars">> = {}
 ): Performer {
   const angle = index * Math.PI * 0.58 - Math.PI * 0.85;
   let position = { x: Math.cos(angle) * 245, y: Math.sin(angle) * 116 };
@@ -326,6 +493,7 @@ export function makePerformer(
     mode: "repeat_hits",
     path: [],
     pivot: { x: 0.5, y: 0.85 },
+    ...shape,
   };
 }
 
@@ -354,7 +522,7 @@ export function demoProject(alternate = false): Project {
     { x: 104, y: 132 },
   ];
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     title: alternate ? "Odd hours club" : "Good things make noise",
     bpm: alternate ? 104 : 112,
     swing: 0.12,
@@ -364,11 +532,10 @@ export function demoProject(alternate = false): Project {
     performers: assets.map((a, i) => ({
       ...makePerformer(a, i),
       id: `p-${i}`,
-      steps: Array.from({ length: 4 }, (_, repeat) =>
-        patterns[i].map((s) => (alternate ? (s + i * 2) % 64 : s) + repeat * 64)
-      )
-        .flat()
-        .sort((a, b) => a - b),
+      steps: repeatCard(
+        patterns[i].map((s) => (alternate ? (s + i * 2) % 64 : s)),
+        4
+      ),
       position: positions[i],
       gainDb: [-7, -11, -14, -17][i],
       motion: i === 2 ? "hop" : "dance",
@@ -376,12 +543,13 @@ export function demoProject(alternate = false): Project {
   };
 }
 
-const everyBar = (pattern: number[]): number[] =>
-  Array.from({ length: loopSteps / 16 }, (_, bar) =>
-    pattern.map((step) => step + bar * 16)
-  ).flat();
-const onBars = (bars: number[], pattern: number[]): number[] =>
-  bars.flatMap((bar) => pattern.map((step) => step + bar * 16));
+const everyBar = (pattern: number[]): number[] => repeatCard(pattern, 1);
+/** A card of `length` bars with this one-bar pattern on the bars it lists. */
+const onBars = (length: number, bars: number[], pattern: number[]): number[] =>
+  repeatCard(
+    bars.flatMap((bar) => pattern.map((step) => step + bar * stepsPerBar)),
+    length
+  );
 
 interface BandMember {
   key: string;
@@ -419,7 +587,10 @@ const BASE_BAND: BandMember[] = [
     key: "snare",
     label: "Crack",
     color: "#c9673a",
-    steps: everyBar([4, 12]),
+    // A little fill at the end of every four bars, so the phrases can be heard turning over.
+    steps: onBars(4, [0, 1, 2, 3], [4, 12])
+      .concat(onBars(4, [3], [14, 15]))
+      .sort((a, b) => a - b),
     position: { x: 90, y: 135 },
     gainDb: -9,
     pan: 0.08,
@@ -459,7 +630,7 @@ const BASE_BAND: BandMember[] = [
     key: "clap",
     label: "Slap Happy",
     color: "#c8704a",
-    steps: onBars([1, 3, 5, 7, 9, 11, 13, 15], [12]),
+    steps: onBars(2, [1], [12]),
     position: { x: -240, y: 130 },
     gainDb: -12,
     pan: -0.15,
@@ -468,7 +639,7 @@ const BASE_BAND: BandMember[] = [
     key: "glock",
     label: "Rainbow",
     color: "#7a78b5",
-    steps: onBars([1, 3, 5, 7, 9, 11, 13, 15], [0, 7, 10]),
+    steps: onBars(2, [1], [0, 7, 10]),
     position: { x: 0, y: 40 },
     gainDb: -18,
     pan: 0.2,
@@ -478,7 +649,7 @@ const BASE_BAND: BandMember[] = [
     key: "laser",
     label: "Pew Pew",
     color: "#8b8f96",
-    steps: onBars([3, 7, 11, 15], [12, 14]),
+    steps: onBars(4, [3], [12, 14]),
     position: { x: 250, y: -50 },
     gainDb: -20,
     pan: 0.35,
@@ -487,7 +658,7 @@ const BASE_BAND: BandMember[] = [
     key: "powerup",
     label: "Gold Star",
     color: "#d9b13b",
-    steps: onBars([7, 15], [0]),
+    steps: onBars(8, [7], [0]),
     position: { x: 80, y: -55 },
     gainDb: -19,
     pan: 0.1,
@@ -496,7 +667,7 @@ const BASE_BAND: BandMember[] = [
     key: "buzzer",
     label: "Game Over",
     color: "#c8402f",
-    steps: onBars([15], [14]),
+    steps: onBars(loopBars, [loopBars - 1], [14]),
     position: { x: 255, y: 125 },
     gainDb: -16,
     pan: 0.3,
@@ -593,7 +764,7 @@ export function starterProject(
     ...(member.tuned ? { tuned: true } : {}),
     path:
       member.key === "bass"
-        ? Array.from({ length: 15 }, (_, step) => ({
+        ? Array.from({ length: loopBars - 1 }, (_, step) => ({
             beat: (step + 1) * 4,
             x: member.position.x + (step % 2 ? 22 : 0),
             y: BASSLINE_HEIGHTS[(step + 1) % BASSLINE_HEIGHTS.length],
@@ -608,7 +779,7 @@ export function starterProject(
     ),
   }));
   return projectSchema.parse({
-    schemaVersion: 3,
+    schemaVersion: 4,
     baseBandVersion: BASE_BAND_VERSION,
     title: "Good things make noise",
     bpm: [104, 108, 112, 116][Math.floor(random() * 4)],

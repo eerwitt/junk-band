@@ -1,6 +1,8 @@
 import type { Asset, Performer, Project } from "../domain/project";
 import {
+  cardEnd,
   compileEvents,
+  phraseStarts,
   stepSeconds,
   wrap,
   type NoteEvent,
@@ -31,6 +33,8 @@ interface Voice {
   length: number;
   velocity: number;
   musical?: MusicalTime;
+  /** A phrase: it belongs to its place in the song, so a jump in the song ends it. */
+  held: boolean;
 }
 
 const DUCKED_LEVEL = 0.04;
@@ -152,7 +156,9 @@ export class AudioEngine {
     velocity: number,
     duration?: number,
     offsetS = 0,
-    musicalTime?: MusicalTime
+    musicalTime?: MusicalTime,
+    /** Cut the sound off after this many seconds, rather than letting it ring out. */
+    cut = Infinity
   ): void {
     if (context === this.context && this.voices.size >= MAX_VOICES) return;
     const source = context.createBufferSource(),
@@ -161,7 +167,10 @@ export class AudioEngine {
     source.buffer = buffer;
     const rate = playbackRate(p, musicalTime?.beat ?? 0);
     source.playbackRate.value = rate;
-    const length = duration ?? buffer.duration / rate;
+    const length = Math.max(
+      0.02,
+      Math.min(duration ?? (buffer.duration - offsetS) / rate, cut)
+    );
     source.loop = duration !== undefined;
     const voice: Voice = {
       source,
@@ -172,6 +181,7 @@ export class AudioEngine {
       length,
       velocity,
       musical: musicalTime,
+      held: musicalTime !== undefined && p.mode === "phrase",
     };
     this.shape(voice, p, time);
     pan.pan.value = p.pan;
@@ -244,12 +254,29 @@ export class AudioEngine {
         ))
     ) {
       const increment = 15 / musical.bpm;
+      // One point a step, but a run of equal points is flat anyway, so only its ends are
+      // written. A long loop then costs a few events, not one per step to the end of the song,
+      // and every edit that rewrites it lands at once.
+      let last = level * gate(reached);
+      let flatUntil: number | undefined;
       for (
         let elapsed = (Math.floor(reached / increment) + 1) * increment;
-        elapsed < end;
+        elapsed < end && level > 0;
         elapsed += increment
-      )
-        param.linearRampToValueAtTime(level * gate(elapsed), time + elapsed);
+      ) {
+        const value = level * gate(elapsed);
+        if (value === last) {
+          flatUntil = elapsed;
+          continue;
+        }
+        if (flatUntil !== undefined)
+          param.linearRampToValueAtTime(last, time + flatUntil);
+        param.linearRampToValueAtTime(value, time + elapsed);
+        last = value;
+        flatUntil = undefined;
+      }
+      if (flatUntil !== undefined)
+        param.linearRampToValueAtTime(last, time + flatUntil);
     }
     if (reached < end) param.setValueAtTime(level * gate(end), time + end);
     param.linearRampToValueAtTime(0, time + length);
@@ -419,7 +446,8 @@ export class AudioEngine {
               event.velocity,
               length,
               0,
-              { beat: step / 4, bpm: snapshot.bpm, project: snapshot }
+              { beat: step / 4, bpm: snapshot.bpm, project: snapshot },
+              holdSeconds(event, snapshot)
             );
             this.scheduledHits++;
           }
@@ -508,6 +536,9 @@ export class AudioEngine {
     scheduledBeat = beat
   ): void {
     const solo = project.performers.some((p) => p.solo);
+    for (const p of project.performers)
+      if (p.mode === "phrase" && !skip.has(p.id))
+        this.resumePhrase(project, p, beat, time, scheduledBeat);
     for (const p of project.performers) {
       const firstBeat = (p.steps[0] ?? loopSteps) / 4;
       if (
@@ -535,6 +566,48 @@ export class AudioEngine {
       );
       this.scheduledHits++;
     }
+  }
+  /**
+   * Starting partway through a phrase picks the sound up where it would be, so a voice or a
+   * recorded beat is never left silent until its card comes round again.
+   */
+  private resumePhrase(
+    project: Project,
+    p: Performer,
+    beat: number,
+    time: number,
+    scheduledBeat: number
+  ): void {
+    const at = beat * 4;
+    const start = phraseStarts(p)
+      .filter((step) => step <= at)
+      .at(-1);
+    if (
+      start === undefined ||
+      at >= cardEnd(p, start) ||
+      // The scheduler will play this one itself.
+      start >= scheduledBeat * 4 ||
+      !this.eventsByStep[start].some((event) => event.performerId === p.id)
+    )
+      return;
+    const asset = project.assets.find((a) => a.id === p.assetId)!;
+    const buffer = this.buffers.get(asset.audioId);
+    if (!buffer) return;
+    const offsetS = (((at - start) / 4) * 60 * p.rate) / project.bpm;
+    if (offsetS >= buffer.duration - 0.05) return;
+    this.voice(
+      this.context!,
+      this.master!,
+      buffer,
+      p,
+      time,
+      1,
+      undefined,
+      offsetS,
+      { beat, bpm: project.bpm, project },
+      (((cardEnd(p, start) - at) / 4) * 60) / project.bpm
+    );
+    this.scheduledHits++;
   }
   /**
    * The mix answers at once: volume, pan, speed, position, mute, pattern, who sits out. Tempo and
@@ -573,7 +646,8 @@ export class AudioEngine {
         continue;
       }
       // A short hit still ringing out must not stop a performer's new loop from starting.
-      if (voice.source.loop) sounding.add(p.id);
+      if (voice.source.loop || (voice.held && p.mode === "phrase"))
+        sounding.add(p.id);
       this.retune(voice, p, this.current);
     }
     // A loop that was silent, or just arrived, should not wait for the loop to come around.
@@ -597,7 +671,7 @@ export class AudioEngine {
       if (!voice.performerId) continue;
       const p = this.current.performers.find((p) => p.id === voice.performerId);
       if (!p) continue;
-      if (voice.source.loop) sounding.add(p.id);
+      if (voice.source.loop || voice.held) sounding.add(p.id);
       this.retune(voice, p, this.current);
     }
     const startsIn = 0.02;
@@ -782,7 +856,7 @@ export class AudioEngine {
   }
   private stopLoops(at: number): void {
     for (const voice of this.voices)
-      if (voice.source.loop) this.silence(voice, at);
+      if (voice.source.loop || voice.held) this.silence(voice, at);
   }
   private silence(voice: Voice, time: number): void {
     voice.gain.gain.cancelScheduledValues(time);
@@ -816,9 +890,18 @@ export class AudioEngine {
         event.velocity,
         p.mode === "continuous_loop" ? duration - time : undefined,
         0,
-        { beat: event.step / 4, bpm: project.bpm, project }
+        { beat: event.step / 4, bpm: project.bpm, project },
+        holdSeconds(event, project)
       );
     }
     return encodeWav(await context.startRendering());
   }
+}
+
+/** How long a note may sound before it is cut short, in seconds; unlimited if it rings out. */
+function holdSeconds(event: NoteEvent, project: Project): number {
+  return event.hold === undefined
+    ? Infinity
+    : stepSeconds(event.step + event.hold, project.bpm, project.swing) -
+        stepSeconds(event.step, project.bpm, project.swing);
 }

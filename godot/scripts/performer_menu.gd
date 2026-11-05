@@ -14,6 +14,7 @@ signal tapped(id: String)
 signal settled
 
 const CARD_PANEL_WIDTH: float = 356.0
+const INK := Color("29271f")
 const TAP_RESTART_MS: int = 2000
 const DEAL_STAGGER: float = 0.016
 const DEAL_TIME: float = 0.2
@@ -25,6 +26,15 @@ const RHYTHM_CARDS: Dictionary = {
 	"Gallop": [0, 3, 4, 7, 8, 11, 12, 15],
 	"Sparse": [0, 10],
 	"Busy": [0, 2, 4, 6, 8, 10, 12, 14],
+}
+## How many bars a card can hold before it repeats. The last is the whole song.
+const CARD_LENGTHS: Array[int] = [1, 2, 4, 8, JunkLoopTiming.BARS]
+const MODES: Array[String] = ["repeat_hits", "phrase", "one_shot", "continuous_loop"]
+const MODE_HINTS: Dictionary = {
+	"repeat_hits": "Every hole is a hit.",
+	"phrase": "The whole sound plays from the first hole of each card, and stops when the card ends.",
+	"one_shot": "Plays once, at its first hole, each time round the song.",
+	"continuous_loop": "Loops round and round, starting at its first hole.",
 }
 
 var performer_id: String = ""
@@ -46,6 +56,11 @@ var _punch: Button
 var _tuned: CheckBox
 var _card_panel: PanelContainer
 var _holes: JunkPunchCard
+var _card_hint: Label
+var _length_buttons: Dictionary = {}
+## Bars the card holds, and the mode its holes are read in.
+var _card_bars: int = 1
+var _performer_mode: String = "repeat_hits"
 var _last_tap_ms: int = -100000
 ## Seconds since the menu or the rhythm card opened, for the cards fanning out.
 var _open_age: float = 10.0
@@ -82,8 +97,9 @@ func _ready() -> void:
 	controls["rate"] = _rate
 	controls["pan"] = _pan
 	var rhythm: VBoxContainer = _card(166)
-	_mode = _choice(rhythm, ["Pattern hits", "One shot", "Sample loop"])
-	_mode.item_selected.connect(func(index: int) -> void: _change({"mode": ["repeat_hits", "one_shot", "continuous_loop"][index]}))
+	_mode = _choice(rhythm, ["Pattern hits", "Phrase", "One shot", "Sample loop"])
+	_mode.tooltip_text = "Pattern hits: every hole is a hit. Phrase: the whole sound, once a card, for voices and recorded beats. One shot: once a song. Sample loop: round and round."
+	_mode.item_selected.connect(func(index: int) -> void: _change({"mode": MODES[index]}))
 	_tuned = CheckBox.new()
 	_tuned.text = "Height sets its note"
 	_tuned.add_theme_font_size_override("font_size", 11)
@@ -137,12 +153,37 @@ func _build_card_panel() -> void:
 	row.add_theme_constant_override("separation", 3)
 	box.add_child(row)
 	for label: String in RHYTHM_CARDS:
-		_add_card_button(row, label, "card_" + label.to_lower(), func() -> void: _set_pattern(RHYTHM_CARDS[label]))
+		_add_card_button(row, label, "card_" + label.to_lower(), func() -> void: _set_ready_made(RHYTHM_CARDS[label]))
 	_add_card_button(row, "Surprise", "card_surprise", _surprise)
+	var lengths := HBoxContainer.new()
+	lengths.add_theme_constant_override("separation", 3)
+	box.add_child(lengths)
+	var lengths_label := Label.new()
+	lengths_label.text = "Card"
+	lengths_label.add_theme_font_size_override("font_size", 10)
+	lengths_label.tooltip_text = "How many bars the card holds before it starts again. Longer cards let a rhythm change from bar to bar."
+	lengths_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	lengths.add_child(lengths_label)
+	for bars: int in CARD_LENGTHS:
+		var label: String = "Song" if bars == JunkLoopTiming.BARS else ("1 bar" if bars == 1 else "%d bars" % bars)
+		_add_card_button(lengths, label, "card_bars_%d" % bars, func() -> void: _set_card_bars(bars))
+		var length_button: Button = controls["card_bars_%d" % bars]
+		length_button.toggle_mode = true
+		# Pressed in, it stays as readable as the others.
+		for state: String in ["font_pressed_color", "font_hover_pressed_color"]:
+			length_button.add_theme_color_override(state, INK)
+		length_button.tooltip_text = "The whole song is one long card." if bars == JunkLoopTiming.BARS else "A card of %s, repeated through the song." % label
+		_length_buttons[bars] = length_button
 	_holes = JunkPunchCard.new()
 	_holes.toggled_step.connect(_toggle_step)
 	box.add_child(_holes)
 	controls["holes"] = _holes
+	_card_hint = Label.new()
+	_card_hint.add_theme_font_size_override("font_size", 10)
+	_card_hint.add_theme_color_override("font_color", Color(0.16, 0.15, 0.12, 0.7))
+	_card_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_card_hint.custom_minimum_size.x = CARD_PANEL_WIDTH - 24.0
+	box.add_child(_card_hint)
 	var tap := Button.new()
 	tap.text = "Tap in time to teach it"
 	tap.add_theme_font_size_override("font_size", 11)
@@ -177,15 +218,31 @@ func _add_card_button(row: HBoxContainer, label: String, key: String, action: Ca
 	controls[key] = button
 
 
-## One bar, repeated across the whole song.
+## The shortest card that repeats into exactly these steps, for songs saved without a length.
+static func card_bars_of(steps: Array) -> int:
+	var held: Dictionary = {}
+	for step: Variant in steps: held[int(step)] = true
+	for bars: int in CARD_LENGTHS:
+		var period: int = bars * 16
+		var repeats: bool = true
+		for step: int in held:
+			if not held.has((step + period) % JunkLoopTiming.STEPS):
+				repeats = false
+				break
+		if repeats: return bars
+	return JunkLoopTiming.BARS
+
+
+## The card, repeated through the whole song.
 func _set_pattern(pattern: Array) -> void:
+	var period: int = _card_bars * 16
 	var steps: Array = []
-	for bar: int in range(JunkLoopTiming.BARS):
+	for repeat: int in range(JunkLoopTiming.STEPS / period):
 		for step: int in pattern:
-			steps.append(bar * 16 + step)
+			if step >= 0 and step < period: steps.append(repeat * period + step)
 	steps.sort()
 	_show_pattern(pattern, true)
-	_change({"steps": steps})
+	_change({"steps": steps, "cardBars": _card_bars})
 
 
 func _show_pattern(pattern: Array, animate: bool = false) -> void:
@@ -194,6 +251,38 @@ func _show_pattern(pattern: Array, animate: bool = false) -> void:
 	if animate: _holes.animate_change(holes)
 	_holes.pattern = holes
 	_holes.queue_redraw()
+
+
+## A longer card repeats what is there, so nothing changes until you punch it; a shorter one
+## keeps its first bars.
+func _set_card_bars(bars: int) -> void:
+	var old: int = _card_bars
+	_show_length(bars)
+	if bars == old: return
+	var pattern: Array = []
+	for step: int in _holes.pattern:
+		if bars > old:
+			for repeat: int in range(bars / old): pattern.append(step + repeat * old * 16)
+		elif step < bars * 16:
+			pattern.append(step)
+	if pattern.is_empty(): pattern = [0]
+	_card_bars = bars
+	_holes.bars = bars
+	_card_panel.reset_size()
+	_set_pattern(pattern)
+
+
+func _show_length(bars: int) -> void:
+	for length: int in _length_buttons:
+		(_length_buttons[length] as Button).set_pressed_no_signal(length == bars)
+
+
+## One bar of a ready-made card on every bar of this one.
+func _set_ready_made(bar_pattern: Array) -> void:
+	var pattern: Array = []
+	for bar: int in range(_card_bars):
+		for step: int in bar_pattern: pattern.append(bar * 16 + step)
+	_set_pattern(pattern)
 
 
 func _toggle_step(step: int) -> void:
@@ -205,20 +294,35 @@ func _toggle_step(step: int) -> void:
 	_set_pattern(pattern)
 
 
+## A bar made up, then each later bar a little different from it, and a fill to end the card.
 func _surprise() -> void:
-	var pattern: Array = [0]
+	var first: Array = [0]
 	for step: int in range(1, 16):
-		if randf() < (0.45 if step % 2 == 0 else 0.18): pattern.append(step)
+		if randf() < (0.45 if step % 2 == 0 else 0.18): first.append(step)
+	var pattern: Array = []
+	for bar: int in range(_card_bars):
+		var row: Array = first.duplicate()
+		if bar > 0:
+			for change: int in range(randi_range(1, 2)):
+				var step: int = randi_range(1, 15)
+				if row.has(step): row.erase(step)
+				else: row.append(step)
+		if _card_bars > 1 and bar == _card_bars - 1:
+			for step: int in [12, 13, 14, 15]:
+				if randf() < 0.6 and not row.has(step): row.append(step)
+		for step: int in row: pattern.append(bar * 16 + step)
 	_set_pattern(pattern)
 
 
-## The first tap after a pause starts a new pattern, and every tap adds the nearest step.
+## The first tap after a pause starts a new pattern, and every tap adds the nearest step, so a
+## longer card can be taught a phrase that changes from bar to bar.
 func _tap() -> void:
 	tapped.emit(performer_id)
 	var now: int = Time.get_ticks_msec()
-	var pattern: Array = [] if now - _last_tap_ms > TAP_RESTART_MS else _holes.pattern.keys()
+	var restart: bool = now - _last_tap_ms > TAP_RESTART_MS * mini(_card_bars, 4)
+	var pattern: Array = [] if restart else _holes.pattern.keys()
 	_last_tap_ms = now
-	var step: int = posmod(roundi(beat * 4.0), 16)
+	var step: int = posmod(roundi(beat * 4.0), _card_bars * 16)
 	_holes.flash(step)
 	if not pattern.has(step): pattern.append(step)
 	_set_pattern(pattern)
@@ -287,14 +391,21 @@ func sync(performer: Dictionary) -> void:
 	_gain.set_value_no_signal(float(performer.gainDb))
 	_rate.set_value_no_signal(float(performer.rate))
 	_pan.set_value_no_signal(float(performer.pan))
-	_mode.select(["repeat_hits", "one_shot", "continuous_loop"].find(performer.mode))
+	_performer_mode = str(performer.mode)
+	_mode.select(MODES.find(_performer_mode))
 	_exit.select(["continue", "fade", "mute"].find(performer.exit))
 	_eraser.visible = not performer.path.is_empty()
 	_tuned.set_pressed_no_signal(bool(performer.get("tuned", false)))
-	var first_bar: Array = []
-	for step: Variant in performer.steps:
-		if int(step) < 16: first_bar.append(int(step))
-	_show_pattern(first_bar)
+	var steps: Array = performer.steps
+	_card_bars = int(performer.get("cardBars", card_bars_of(steps)))
+	_holes.bars = _card_bars
+	_card_panel.reset_size()
+	_show_length(_card_bars)
+	var card: Array = []
+	for step: Variant in steps:
+		if int(step) < _card_bars * 16: card.append(int(step))
+	_show_pattern(card)
+	_card_hint.text = MODE_HINTS.get(_performer_mode, "")
 	_syncing = false
 
 
@@ -346,7 +457,8 @@ func _deal(control: Control, center: Vector2, target: Vector2, order: int) -> vo
 
 
 func arrange(anchor: Vector2) -> void:
-	var bottom_room: float = 340.0 if _card_panel.visible else 240.0
+	# Below the character there must be room for the card, which grows with the bars it holds.
+	var bottom_room: float = 232.0 + _card_panel.size.y + 8.0 if _card_panel.visible else 240.0
 	var center := Vector2(clampf(anchor.x, 183, maxf(183, size.x - 183)), clampf(anchor.y, 170, maxf(170, size.y - bottom_room)))
 	var radius: float = minf(225, (size.x - 12) / 2.0)
 	_blur.position = center - Vector2.ONE * radius

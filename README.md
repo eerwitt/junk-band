@@ -35,12 +35,14 @@ To use real models, copy `.env.example` to `.env`, set `MODEL_API_KEY` and/or Mo
 ## Playing
 
 - New sessions start with the base band: eleven painted characters with CC0 sounds (see `public/sounds/CREDITS.md`). Playback starts automatically, or on the first click if the browser blocks autoplay.
-- **The ring is the song**: sixteen bars in eight sections. Drag along it to scrub; click a section to loop it, click the outer strip (or Escape) to return to the whole song. Drag a character off the stage to sit it out of a section.
+- **The ring is the song**: thirty-two bars (about a minute) in eight four-bar sections. Drag along it to scrub; click a section to loop it, click the outer strip (or Escape) to return to the whole song. Drag a character off the stage to sit it out of a section.
 - **Tap a character** for its radial controls: volume, pitch/speed, pan, playback mode, rhythm card, duplicate, pencil (draw a motion path), eraser and skull (remove). Click empty stage or press Escape to close.
+- **Rhythm cards** hold 1, 2, 4 or 8 bars, or the whole song, before repeating, one row of holes per bar. A longer card starts as copies of the shorter one, so each bar can then be changed on its own. Tapping in time on a longer card teaches it a phrase across its bars.
+- **Playback modes**: _Pattern hits_ sounds at every hole. _Phrase_ plays the whole sound from the first hole of each card and stops at the card's end, which suits voices and recorded beats. _One shot_ plays once per song, and _Sample loop_ loops freely. Your own recordings cut their previous hit short instead of piling up; the base band rings out.
 - **Height sets the note** for tuned characters, snapped to one scale.
 - **Tempo** is the cardboard metronome: drag, scroll, arrow keys, or tap it in time.
-- **Add** takes a clip (up to 1 min and 200 MB) in three steps: trim the 2–8 s you want to hear, paint over the object on a frame and say what you want to hear, then **Make it**. The sound, the cutout and its painting all start at once; compare Cutout | Painted and Separated | Original clip, then **Add to band**. The permission checkbox is asked once per browser.
-- **Save** exports a sixteen-bar stereo WAV. The help drawer saves and opens portable `.junk.json` projects, including accepted media.
+- **Add** takes a clip (up to 1 min and 200 MB) in three steps: trim the 2–8 s you want to hear, paint over the object on a frame and say what you want to hear, then **Make it**. The sound, the cutout and its painting all start at once; compare Cutout | Painted and Separated | Original clip, choose **How it plays** (Hit, Phrase, or Loop, where the band changes tempo so the sound fills whole bars; the default comes from its length), then **Add to band**. Quiet at either end of the sound is trimmed so hits land on time, and its level is evened out. The permission checkbox is asked once per browser.
+- **Save** exports the whole song as a stereo WAV. The help drawer saves and opens portable `.junk.json` projects, including accepted media.
 
 Keys: Space play/pause · Ctrl/⌘ Z undo · Delete remove · R export WAV · Home reset camera · Escape close. Scroll zooms at the cursor; middle/right drag pans.
 

@@ -352,7 +352,7 @@ export async function startRuntime(): Promise<JunkBridgeAPI> {
             await audio.export(store.state.project),
             `${store.state.project.title}.wav`
           );
-          store.notice("One complete sixteen-bar loop, bounced to stereo WAV.");
+          store.notice("The whole song, bounced to stereo WAV.");
         } finally {
           exporting = false;
         }

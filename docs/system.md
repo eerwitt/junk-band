@@ -13,7 +13,7 @@ Godot (`godot/`) owns the stage, puppets, shadows, pickup, path drawing, the rad
 | `src/services/gateway.ts` | Typed gateway client.                                                                                                                                                                                    |
 | `godot/scripts/`          | `studio.gd` (shell), `stage.gd`, `puppet.gd`, `cardboard_*.gd` (material and rig), `performer_menu.gd`, `orbit_scrubber.gd`, `tempo_dial.gd`, `punch_card.gd`, `landing_effect.gd`, `browser_bridge.gd`. |
 
-`src/domain/timing.ts` defines 16 bars, 64 beats and 256 steps; the build generates the matching `JunkLoopTiming` constants for Godot.
+`src/domain/timing.ts` defines 32 bars, 128 beats and 512 steps, and the rhythm card lengths (1, 2, 4, 8 bars or the whole song); the build generates the matching `JunkLoopTiming` constants for Godot.
 
 ## JavaScriptBridge protocol
 
@@ -29,7 +29,7 @@ Godot (`godot/`) owns the stage, puppets, shadows, pickup, path drawing, the rad
 
 ## Audio
 
-Project changes compile one 256-step event table, committed on a bar boundary (mix changes and sit-outs apply at once, tempo and swing on the next beat). A 25 ms lookahead task schedules source nodes 120 ms ahead on the audio clock. Seeking invalidates the transport epoch and fades active voices; continuous samples resume at their proper offset.
+Project changes compile one 512-step event table, committed on a bar boundary (mix changes and sit-outs apply at once, tempo and swing on the next beat). A 25 ms lookahead task schedules source nodes 120 ms ahead on the audio clock. Seeking invalidates the transport epoch and fades active voices; continuous samples and phrases resume at their proper offset. Events from phrases and from imported sounds carry a `hold`, the steps until they are cut off (the next hit, or the card's end), so a long sound never stacks on itself, live or in export.
 
 Buffers are cached by immutable audio ID. Each voice has attack/release, rate, pan and section gain before a master compressor. Sample speed changes pitch; there is no time stretch. WAV export runs the same compiler and mix in an `OfflineAudioContext` and encodes stereo PCM16.
 
@@ -37,7 +37,7 @@ Godot never schedules notes from `_process()` or a Timer; note envelopes and ons
 
 ## Persistence
 
-IndexedDB stores source and accepted blobs and autosaves validated project metadata. Older schemas upgrade on load (four-bar scenes repeat to sixteen bars, four sections become eight, and pre-base-band songs gain the band once). Portable bundles include accepted assets, so a fresh browser can restore and play them without the server. Undo keeps at most 30 snapshots; a run of volume, pitch or pan slider changes to one performer is a single step.
+IndexedDB stores source and accepted blobs and autosaves validated project metadata. Older schemas upgrade on load (four-bar scenes repeat to sixteen bars, four sections become eight, sixteen-bar songs become thirty-two with each section twice as long and every pattern and path played through twice, and pre-base-band songs gain the band once). Portable bundles include accepted assets, so a fresh browser can restore and play them without the server. Undo keeps at most 30 snapshots; a run of volume, pitch or pan slider changes to one performer is a single step.
 
 ## Gateway
 
