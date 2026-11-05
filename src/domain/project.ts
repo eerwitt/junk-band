@@ -51,6 +51,7 @@ export const assetSchema = z.object({
     "mock candidate",
     "SAM Audio",
     "base band",
+    "microphone",
   ]),
   sourceId: z.string().optional(),
   startS: z.number().optional(),

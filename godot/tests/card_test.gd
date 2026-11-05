@@ -75,5 +75,9 @@ func _run() -> void:
 	menu.sync(performer)
 	assert(menu._mode.selected == JunkPerformerMenu.MODES.find("phrase"))
 	assert(menu._card_hint.text.contains("whole sound"))
+	assert(menu._holes.phrase, "The card shows where the phrase is heard")
+	performer.mode = "repeat_hits"
+	menu.sync(performer)
+	assert(not menu._holes.phrase)
 	print("Card regression passed: card lengths, true patterns, longer and shorter cards, ready-made cards, tapped phrases, page turns and phrase mode")
 	quit()

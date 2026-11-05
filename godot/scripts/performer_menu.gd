@@ -406,6 +406,7 @@ func sync(performer: Dictionary) -> void:
 		if int(step) < _card_bars * 16: card.append(int(step))
 	_show_pattern(card)
 	_card_hint.text = MODE_HINTS.get(_performer_mode, "")
+	_holes.phrase = _performer_mode == "phrase"
 	_syncing = false
 
 

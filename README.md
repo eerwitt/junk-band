@@ -42,6 +42,7 @@ To use real models, copy `.env.example` to `.env`, set `MODEL_API_KEY` and/or Mo
 - **Height sets the note** for tuned characters, snapped to one scale.
 - **Tempo** is the cardboard metronome: drag, scroll, arrow keys, or tap it in time.
 - **Add** takes a clip (up to 1 min and 200 MB) in three steps: trim the 2–8 s you want to hear, paint over the object on a frame and say what you want to hear, then **Make it**. The sound, the cutout and its painting all start at once; compare Cutout | Painted and Separated | Original clip, choose **How it plays** (Hit, Phrase, or Loop, where the band changes tempo so the sound fills whole bars; the default comes from its length), then **Add to band**. Quiet at either end of the sound is trimmed so hits land on time, and its level is evened out. The permission checkbox is asked once per browser.
+- **Record along with the band** (in Add) uses the microphone, with no server needed: pick who sings (tin, duck, bottle or matchbox) and 1, 2 or 4 bars, then press Record. One bar of clicks counts you in, and exactly those bars are kept, lined up with the song (compensated for speaker and microphone latency). The take joins as a phrase that comes round where it was sung. _Hear it with the band_ plays it in time before you add it.
 - **Save** exports the whole song as a stereo WAV. The help drawer saves and opens portable `.junk.json` projects, including accepted media.
 
 Keys: Space play/pause · Ctrl/⌘ Z undo · Delete remove · R export WAV · Home reset camera · Escape close. Scroll zooms at the cursor; middle/right drag pans.

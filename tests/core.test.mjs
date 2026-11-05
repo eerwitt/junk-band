@@ -447,6 +447,44 @@ describe("adding your own sounds", async () => {
     assert.deepEqual(playShape("hit", 4, 112), {});
   });
 });
+describe("recording along with the band", async () => {
+  const { cutTake, rotate, finishTake, peakOf } = await import(
+    "../dist/modules/audio/take.js"
+  );
+  it("keeps exactly the bars asked for, from the moment they start", () => {
+    const chunk = (frame, values) => ({
+      frame,
+      data: Float32Array.from(values),
+    });
+    // Ten samples a second; the take starts at 0.3 s and lasts 0.5 s.
+    const take = cutTake(
+      [chunk(0, [0, 1, 2, 3]), chunk(4, [4, 5]), chunk(8, [8, 9, 10])],
+      10,
+      0.3,
+      0.5
+    );
+    assert.deepEqual(
+      [...take],
+      [3, 4, 5, 0, 0],
+      "A dropped chunk stays silent"
+    );
+    assert.equal(cutTake([], 10, 0, 1).length, 10);
+  });
+  it("turns a take round so it starts where its card starts", () => {
+    const take = Float32Array.from([1, 2, 3, 4]);
+    // Sung from the second bar of a two-bar card: that bar belongs second.
+    assert.deepEqual([...rotate(take, 2)], [3, 4, 1, 2]);
+    assert.deepEqual([...rotate(take, 0)], [1, 2, 3, 4]);
+    assert.deepEqual([...rotate(take, 5)], [4, 1, 2, 3]);
+    assert.deepEqual([...take], [1, 2, 3, 4], "The take itself is untouched");
+  });
+  it("evens out a take's level and softens its edges", () => {
+    const take = new Float32Array(1000).fill(0.1);
+    finishTake(take, 1000, 2);
+    assert.ok(Math.abs(peakOf(take) - 0.2) < 1e-6);
+    assert.ok(take[0] < 0.1 && take.at(-1) < 0.1);
+  });
+});
 describe("deterministic motion and persistence schema", () => {
   it("seeks to the same exact pose independent of prior evaluations", () => {
     const performer = demoProject().performers[0],

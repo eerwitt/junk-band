@@ -33,6 +33,8 @@ Project changes compile one 512-step event table, committed on a bar boundary (m
 
 Buffers are cached by immutable audio ID. Each voice has attack/release, rate, pan and section gain before a master compressor. Sample speed changes pitch; there is no time stretch. WAV export runs the same compiler and mix in an `OfflineAudioContext` and encodes stereo PCM16.
 
+Recording along captures the microphone with an AudioWorklet on the band's own `AudioContext`, so each sample has an audio-clock frame. The take is cut to exactly the chosen bars from the bar line after the count-in, shifted by output plus input latency, then rotated so it starts at its card's first bar (`src/audio/take.ts`).
+
 Godot never schedules notes from `_process()` or a Timer; note envelopes and onsets from `frame()` drive each note's pop and marks, and the beat drives the groove. Drawn paths use cubic Hermite interpolation closed at home, and the same evaluator gates offstage audio.
 
 ## Persistence

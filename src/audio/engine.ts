@@ -11,7 +11,7 @@ import { stageGain } from "../domain/motion";
 import { noteRow, playbackRate } from "../domain/pitch";
 import { createDemoBuffer } from "./demo";
 import { encodeWav } from "./wav";
-import { loopBeats, loopSteps, pulseAtAge } from "../domain/timing";
+import { loopBars, loopBeats, loopSteps, pulseAtAge } from "../domain/timing";
 import {
   sectionGain,
   sectionMixKey,
@@ -59,6 +59,7 @@ export class AudioEngine {
   private master?: DynamicsCompressorNode;
   private output?: GainNode;
   private ducked = false;
+  private duckedLevel = DUCKED_LEVEL;
   private buffers = new Map<string, AudioBuffer>();
   private voices = new Set<Voice>();
   private timer?: number;
@@ -96,18 +97,80 @@ export class AudioEngine {
   }
 
   /** Bring the band right down while something else needs to be heard, or restore it. */
-  setDucked(ducked: boolean): void {
+  setDucked(ducked: boolean, level = DUCKED_LEVEL): void {
     this.ducked = ducked;
+    this.duckedLevel = level;
     if (!this.output || !this.context) return;
     // Start from wherever a previous fade reached, so reopening quickly cannot jump.
     const now = this.context.currentTime;
     this.output.gain.cancelScheduledValues(now);
     this.output.gain.setValueAtTime(this.output.gain.value, now);
-    this.output.gain.setTargetAtTime(
-      ducked ? DUCKED_LEVEL : 1,
-      now,
-      DUCK_FADE_S
-    );
+    this.output.gain.setTargetAtTime(ducked ? level : 1, now, DUCK_FADE_S);
+  }
+  /** The band's audio clock, once sound is unlocked: a microphone is heard on the same one. */
+  get liveContext(): AudioContext | undefined {
+    return this.context;
+  }
+  /** Seconds between a sound being scheduled and it leaving the speakers. */
+  get outputLatency(): number {
+    return this.context
+      ? this.context.outputLatency || this.context.baseLatency || 0
+      : 0;
+  }
+  get tempo(): number {
+    return (this.current ?? this.pending)?.bpm ?? 0;
+  }
+  /**
+   * The first bar line of the song at or after `time` on the audio clock, and which bar of the
+   * song starts there. Only while the band is playing; a tempo change waiting for its bar is
+   * not counted.
+   */
+  barAfter(time: number): { time: number; bar: number } | undefined {
+    if (!this.playing || !this.current || !this.context) return undefined;
+    const { bpm } = this.current;
+    const beats = ((time - this.origin) * bpm) / 60;
+    const next = Math.ceil(beats / 4 - 1e-6) * 4;
+    return {
+      time: this.origin + (next * 60) / bpm,
+      bar: wrap(next / 4, loopBars),
+    };
+  }
+  /** A count-in click: a short knock, higher on the first beat of the bar. */
+  tick(time: number, accent: boolean): void {
+    if (!this.context || !this.master) return;
+    const oscillator = this.context.createOscillator();
+    const gain = this.context.createGain();
+    oscillator.frequency.value = accent ? 1568 : 1046;
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(accent ? 0.32 : 0.2, time + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.07);
+    oscillator.connect(gain);
+    gain.connect(this.master);
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      gain.disconnect();
+    };
+    oscillator.start(time);
+    oscillator.stop(time + 0.08);
+  }
+  /** Play a take once, from `time`, over the band. Returns a way to stop it early. */
+  playTake(buffer: AudioBuffer, time: number): () => void {
+    const context = this.context!;
+    const source = context.createBufferSource();
+    const gain = context.createGain();
+    source.buffer = buffer;
+    gain.gain.value = 0.72 * Math.pow(10, -9 / 20);
+    source.connect(gain);
+    gain.connect(this.master!);
+    source.onended = () => {
+      source.disconnect();
+      gain.disconnect();
+    };
+    source.start(time);
+    return () => {
+      gain.gain.setTargetAtTime(0, context.currentTime, 0.01);
+      source.stop(context.currentTime + 0.05);
+    };
   }
   async unlock(): Promise<void> {
     if (!this.context) {
@@ -119,7 +182,7 @@ export class AudioEngine {
       this.master.attack.value = 0.003;
       this.master.release.value = 0.15;
       this.output = this.context.createGain();
-      this.output.gain.value = this.ducked ? DUCKED_LEVEL : 1;
+      this.output.gain.value = this.ducked ? this.duckedLevel : 1;
       this.master.connect(this.output);
       this.output.connect(this.context.destination);
     }

@@ -30,6 +30,9 @@ var bars: int = 1:
 var page: int = 0
 var beat: float = 0.0
 var playing: bool = false
+## In a phrase, the whole sound plays from the first hole to the end of the card: shown as a
+## strip of colour under the holes, so you can see where it will be heard.
+var phrase: bool = false
 var _hover: int = -1
 var _hover_tab: int = -1
 var reduced_motion: bool = false
@@ -188,6 +191,16 @@ func _draw() -> void:
 			var label: String = "%d–%d" % [first, mini(bars, first + ROWS_SHOWN - 1)]
 			draw_string(font, Vector2(tab.position.x, tab.position.y + 12.0), label, HORIZONTAL_ALIGNMENT_CENTER, tab.size.x, FONT_SIZE, Color(INK, 0.85 if open else 0.55))
 	draw_set_transform(knock)
+	if phrase and not pattern.is_empty():
+		var first: int = pattern.keys().min()
+		for row: int in range(rows()):
+			var bar: int = page * ROWS_SHOWN + row
+			if bar >= bars or (bar + 1) * STEPS <= first: continue
+			var from: Vector2 = hole_center(maxi(first, bar * STEPS))
+			var to: Vector2 = hole_center(bar * STEPS + STEPS - 1)
+			var band := Rect2(from.x - HOLE_RADIUS - 2.0, from.y - HOLE_RADIUS - 2.0, to.x - from.x + HOLE_RADIUS * 2.0 + 4.0, HOLE_RADIUS * 2.0 + 4.0)
+			draw_rect(band, Color(ORANGE, 0.16), true)
+			if bar * STEPS <= first: draw_rect(Rect2(band.position, Vector2(3.0, band.size.y)), Color(ORANGE, 0.7), true)
 	for row: int in range(rows()):
 		var bar: int = page * ROWS_SHOWN + row
 		if bar >= bars: break

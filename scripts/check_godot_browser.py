@@ -466,6 +466,29 @@ def check_rhythm_card_and_notes(page: Page, output: Path) -> None:
     page.wait_for_function(
         "window.JUNK.snapshot().project.performers.find(p => p.id === 'p-0').cardBars === 1"
     )
+    # A phrase shows where its whole sound is heard: from its first hole to the card's end.
+    saved = performer(page, "p-0")
+    page.evaluate(
+        """() => window.JUNK.command(JSON.stringify({
+          kind: 'update_performer',
+          payload: { id: 'p-0', patch: { mode: 'phrase', cardBars: 2, steps: Array.from({ length: 16 }, (_, i) => i * 32 + 8) } },
+        }))"""
+    )
+    page.wait_for_function(
+        "window.JUNK.snapshot().project.performers.find(p => p.id === 'p-0').mode === 'phrase'"
+    )
+    page.wait_for_timeout(500)
+    page.screenshot(path=str(output / "rhythm-card-phrase.png"), full_page=True)
+    page.evaluate(
+        """(p) => window.JUNK.command(JSON.stringify({
+          kind: 'update_performer',
+          payload: { id: 'p-0', patch: { mode: p.mode, cardBars: p.cardBars, steps: p.steps } },
+        }))""",
+        saved,
+    )
+    page.wait_for_function(
+        "window.JUNK.snapshot().project.performers.find(p => p.id === 'p-0').mode === 'repeat_hits'"
+    )
     # Switching on "height sets its note" is saved on the character.
     assert not performer(page, "p-0").get("tuned")
     click_control(page, "tuned")

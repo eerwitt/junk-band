@@ -1394,3 +1394,187 @@ li {
 .review-style-note {
   margin: 4px 0 0;
 }
+/* Two ways in: bring a video, or record along with the band. */
+.bring-ways {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+}
+.sing-target {
+  min-height: 26dvh;
+  border: 2px dashed #b8a98a;
+  font-size: 18px;
+  background: #fff6ec;
+  color: var(--orange);
+}
+.sing-target:hover {
+  background: #fbeadb;
+}
+@media (max-width: 860px) {
+  .bring-ways {
+    grid-template-columns: 1fr;
+  }
+  .drop-target,
+  .sing-target {
+    min-height: 16dvh;
+  }
+}
+/* Sing along: pick a character and a length, then a big record button and a count-in. */
+.sing-phase {
+  max-width: 860px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.sing-lead {
+  margin: 0;
+  font-size: 15px;
+}
+.sing-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  gap: 18px;
+  align-items: stretch;
+}
+@media (max-width: 860px) {
+  .sing-body {
+    grid-template-columns: 1fr;
+  }
+}
+.sing-choices .review-style-head:first-child {
+  margin-top: 0;
+}
+.singer-picker {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.singer {
+  aspect-ratio: 1;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #f0e9d8 url("/sprites.png") no-repeat;
+  background-size: 200% 200%;
+  transition: transform 0.12s ease;
+}
+.singer:hover:not(:disabled) {
+  transform: rotate(-3deg) scale(1.04);
+}
+.singer[aria-pressed="true"] {
+  border-color: var(--orange);
+  background-color: var(--mint);
+  transform: rotate(2deg);
+}
+.sing-stage {
+  position: relative;
+  min-height: 220px;
+  padding: 18px;
+  border: 2px dashed #b8a98a;
+  background: #fffdf5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.sing-count {
+  margin: 0;
+  font-size: 52px;
+  line-height: 1;
+  font-weight: 700;
+  color: #29271f;
+}
+.sing-phase[data-state="counting"] .sing-count {
+  color: var(--orange);
+}
+.sing-phase[data-state="recording"] .sing-count {
+  color: var(--orange);
+}
+.sing-bars {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+.sing-bar {
+  --fill: 0;
+  flex: 1 1 0;
+  height: 14px;
+  background: linear-gradient(
+      to right,
+      var(--orange) calc(var(--fill) * 100%),
+      transparent 0
+    ),
+    #efe7d4;
+  clip-path: polygon(1% 10%, 50% 0, 99% 8%, 100% 90%, 50% 100%, 0 92%);
+}
+.sing-level {
+  width: 60%;
+  height: 6px;
+  background: #efe7d4;
+  overflow: hidden;
+}
+.sing-level-fill {
+  display: block;
+  height: 100%;
+  background: #6d9990;
+  transform-origin: left;
+  transform: scaleX(0);
+}
+.sing-wave {
+  width: 100%;
+  height: 90px;
+}
+.sing-wave[hidden] {
+  display: none;
+}
+.sing-record {
+  min-width: 140px;
+  border-radius: 999px;
+  background: var(--orange);
+  border-color: var(--orange);
+  color: #fffdf5;
+  font-size: 15px;
+  padding: 10px 22px;
+}
+.sing-record:hover:not(:disabled) {
+  background: #a65330;
+  border-color: #a65330;
+  color: #fffdf5;
+}
+.sing-record::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: #fffdf5;
+}
+.sing-record.recording::before {
+  border-radius: 1px;
+  animation: sing-blink 0.8s steps(2) infinite;
+}
+@keyframes sing-blink {
+  to {
+    opacity: 0.2;
+  }
+}
+.sing-kept {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sing-kept[hidden] {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sing-record.recording::before {
+    animation: none;
+  }
+  .singer {
+    transition: none;
+  }
+}

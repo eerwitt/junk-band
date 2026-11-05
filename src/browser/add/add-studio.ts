@@ -6,8 +6,9 @@ import type { StudioStore } from "../store";
 import { ClipPhase, MAX_STRETCH_S, type KeptMoment } from "./clip-phase";
 import { ObjectsPhase, type Made } from "./objects-phase";
 import { ReviewPhase, type ReviewSource } from "./review-phase";
+import { SingAlong } from "./sing-along";
 
-type Phase = "bring" | "moment" | "object" | "review";
+type Phase = "bring" | "sing" | "moment" | "object" | "review";
 const STEPS: readonly { id: Phase; label: string }[] = [
   { id: "moment", label: "Pick the sound" },
   { id: "object", label: "Choose the object" },
@@ -46,6 +47,7 @@ export class AddStudio {
   private clip: ClipPhase;
   private objects: ObjectsPhase;
   private review: ReviewPhase;
+  private sing: SingAlong;
   private source?: ReviewSource;
   private moment?: KeptMoment;
   private reached = new Set<Phase>(["bring"]);
@@ -62,6 +64,11 @@ export class AddStudio {
       () => !this.root.hidden,
       () => this.close(true),
       () => this.setPhase("object")
+    );
+    this.sing = new SingAlong(
+      store,
+      () => this.close(true),
+      () => this.setPhase("bring")
     );
     this.rightsField = field(
       "I own this media or have permission to use it",
@@ -98,6 +105,7 @@ export class AddStudio {
     const body = element("div", "add-body");
     body.append(
       this.bring,
+      this.sing.root,
       this.clip.root,
       this.objects.root,
       this.review.root
@@ -170,8 +178,20 @@ export class AddStudio {
     );
     demo.title =
       "Generated artwork and synthesized audio, not a real-object recording.";
+    const singAlong = button(
+      "Record along with the band",
+      () => {
+        this.setPhase("sing");
+        this.sing.open();
+      },
+      "sing-target"
+    );
+    singAlong.title =
+      "Sing, beatbox or bang along with the microphone. It records in time.";
+    const ways = element("div", "bring-ways");
+    ways.append(drop, singAlong);
     this.bring.append(
-      drop,
+      ways,
       this.input,
       element(
         "p",
@@ -230,6 +250,7 @@ export class AddStudio {
     this.root.hidden = true;
     this.clip.pause();
     this.review.pause();
+    this.sing.leave();
     audio.setDucked(false);
     if (finished) {
       this.reached = new Set(["bring"]);
@@ -246,6 +267,7 @@ export class AddStudio {
     this.pendingFile = undefined;
     this.clip.pause();
     this.review.reset();
+    this.sing.reset();
     if (this.source) URL.revokeObjectURL(this.source.url);
     this.source = undefined;
     this.moment = undefined;
@@ -276,10 +298,12 @@ export class AddStudio {
     this.root.dataset.phase = phase;
     if (!this.root.hidden) this.root.focus({ preventScroll: true });
     this.bring.hidden = phase !== "bring";
+    this.sing.root.hidden = phase !== "sing";
+    if (phase !== "sing") this.sing.leave();
     this.clip.root.hidden = phase !== "moment";
     this.objects.root.hidden = phase !== "object";
     this.review.root.hidden = phase !== "review";
-    this.steps.hidden = phase === "bring";
+    this.steps.hidden = phase === "bring" || phase === "sing";
     this.renderStartOver();
     if (phase !== "moment") this.clip.pause();
     if (phase !== "review") this.review.pause();

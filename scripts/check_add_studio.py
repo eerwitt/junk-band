@@ -111,6 +111,9 @@ def main() -> None:
                 "--use-angle=swiftshader",
                 "--enable-unsafe-swiftshader",
                 "--autoplay-policy=no-user-gesture-required",
+                # A pretend microphone, allowed without asking, for recording along.
+                "--use-fake-ui-for-media-stream",
+                "--use-fake-device-for-media-stream",
             ],
         )
         page = browser.new_context(viewport={"width": 1440, "height": 900}).new_page()
@@ -389,6 +392,40 @@ def main() -> None:
         asset = page.evaluate("window.JUNK.snapshot().project.assets.at(-1)")
         assert asset["provenance"] == "raw import"
         assert "Hand-drawn mask" in asset["visualProvenance"], asset["visualProvenance"]
+
+        # Recording along: a count-in, then exactly the bars chosen, in time, as a phrase.
+        open_add(page)
+        studio.get_by_role("button", name="Record along with the band").click()
+        sing = page.locator(".sing-phase")
+        expect(sing).to_be_visible()
+        expect(studio.locator(".add-steps")).to_be_hidden()
+        sing.get_by_role("button", name="Matchbox").click()
+        sing.get_by_role("button", name="1 bar", exact=True).click()
+        page.screenshot(path=str(args.output / "sing-ready.png"))
+        sing.get_by_role("button", name="Record", exact=True).click()
+        page.wait_for_function(
+            "['counting', 'recording'].includes(document.querySelector('.sing-phase').dataset.state)"
+        )
+        page.wait_for_function("/^[1-4]$/.test(document.querySelector('.sing-count').textContent)")
+        page.screenshot(path=str(args.output / "sing-count.png"))
+        page.wait_for_function(
+            "document.querySelector('.sing-phase').dataset.state === 'done'", timeout=20000
+        )
+        page.screenshot(path=str(args.output / "sing-take.png"))
+        sing.get_by_label("Its name").fill("Pot lid")
+        sing.get_by_role("button", name="Add to band").click()
+        expect(studio).to_be_hidden()
+        page.wait_for_function(
+            "n => window.JUNK.snapshot().project.performers.length === n", arg=performers + 4
+        )
+        project = page.evaluate("window.JUNK.snapshot().project")
+        asset = project["assets"][-1]
+        joined = project["performers"][-1]
+        assert asset["provenance"] == "microphone" and asset["tile"] == 3, asset
+        assert asset["label"] == "Pot lid"
+        bar_s = 240 / project["bpm"]
+        assert abs(asset["lengthS"] - bar_s) < 0.01, (asset["lengthS"], bar_s)
+        assert joined["mode"] == "phrase" and joined["cardBars"] == 1, joined
 
         assert not errors, errors
         (args.output / "summary.json").write_text(
