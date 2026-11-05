@@ -1,6 +1,6 @@
 # Asset provenance
 
-**Base band.** The eleven sounds in `public/sounds/` are CC0 recordings from VCSL and Kenney, trimmed and levelled by `scripts/prepare_band.py`; sources are listed in `public/sounds/CREDITS.md`. Their pictures in `public/band/` were painted with Meta Muse Image for this project.
+**Base band.** The fifteen sounds in `public/sounds/` are CC0 recordings from VCSL and Kenney, trimmed and levelled by `scripts/prepare_band.py`; sources are listed in `public/sounds/CREDITS.md`. Their pictures in `public/band/` were painted with Meta Muse Image for this project; the four added in band version 2 (sub, organ, didge, flute) are drawn stand-ins until they are painted.
 
 **Demo band.** `src/audio/demo.ts` synthesizes four original, deterministic samples (low thump, noisy snare, tuned glass tone, high tick) for the demo scene. `public/sprites.png` (also `godot/assets/sprites.png`) is the matching generated four-tile atlas: tin can, rubber duck, bottle and matchbox. These are labelled as synthesized demo sounds and never represent real segmentation.
 

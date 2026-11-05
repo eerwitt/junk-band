@@ -14,6 +14,10 @@ These files were trimmed, faded and levelled from the originals by `scripts/prep
 | `keys.wav` | VCSL | TX81Z FM Piano, `FMPiano_C3_vl2.wav` |
 | `marimba.wav` | VCSL | Marimba, `Marimba_hit_Outrigger_C4_med_01.wav` |
 | `glock.wav` | VCSL | Glockenspiel, `glock_medium_C5_01.wav` |
+| `sub.wav` | VCSL | TX81Z Clavisynth, `Clavisynth_C1_vl3.wav` |
+| `organ.wav` | VCSL | Pipe Organ, Loud Pedal, `Rode_Pedal_C2.wav` |
+| `didge.wav` | VCSL | Didgeridoo, `Didgeridoo1_Bark1_Main_rr3.wav` |
+| `flute.wav` | VCSL | Baroque Alto Recorder, SusVib, `AltRecorder_SusVib_C5_rr1_Main.wav` |
 | `laser.wav` | Kenney | Digital SFX set, `laser4.mp3` |
 | `powerup.wav` | Kenney | Digital SFX set, `powerUp7.mp3` |
 | `buzzer.wav` | Kenney | Interface Sounds, `error_004.wav` |
@@ -21,4 +25,4 @@ These files were trimmed, faded and levelled from the originals by `scripts/prep
 - VCSL, the Versilian Community Sample Library: https://github.com/sgossner/VCSL
 - Kenney: https://www.kenney.nl
 
-The band's pictures in `public/band/` were painted with Meta Muse Image for this project.
+The band's pictures in `public/band/` were painted with Meta Muse Image for this project, except `sub.png`, `organ.png`, `didge.png` and `flute.png`: those are hand-drawn stand-ins until `scripts/prepare_band.py --repaint sub organ didge flute` paints them.

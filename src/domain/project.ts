@@ -299,7 +299,7 @@ export function makePerformer(
       )
     );
   if (clearance(position) < 120) {
-    const choices = [-125, 0, 110].flatMap((y) =>
+    const choices = [-185, -125, 0, 110].flatMap((y) =>
       [-260, -130, 0, 130, 260].map((x) => ({ x, y }))
     );
     position = choices.reduce(
@@ -501,23 +501,68 @@ const BASE_BAND: BandMember[] = [
     gainDb: -16,
     pan: 0.3,
   },
+  // Band version 2: the low end and a flute on top.
+  {
+    key: "sub",
+    label: "Rumble",
+    color: "#56aab2",
+    steps: everyBar([0, 7, 8]),
+    position: { x: 330, y: 5 },
+    gainDb: -8,
+    pan: 0,
+    tuned: true,
+    motion: "glide",
+  },
+  {
+    key: "organ",
+    label: "Big Pipes",
+    color: "#9a8e7c",
+    steps: onBars([0, 2, 4, 6, 8, 10, 12, 14], [0]),
+    position: { x: -215, y: -115 },
+    gainDb: -13,
+    pan: -0.2,
+  },
+  {
+    key: "didge",
+    label: "Drone Zone",
+    color: "#b4703e",
+    steps: everyBar([3, 11, 14]),
+    position: { x: 195, y: -125 },
+    gainDb: -11,
+    pan: 0.2,
+    motion: "hop",
+  },
+  {
+    key: "flute",
+    label: "Toot Sweet",
+    color: "#c4ccce",
+    steps: onBars([1, 3, 5, 7, 9, 11, 13, 15], [0, 3, 6, 8, 12]),
+    position: { x: -15, y: -130 },
+    gainDb: -14,
+    pan: 0.15,
+    tuned: true,
+  },
 ];
 
 /** Who is on stage in each default section, by member. No bar is ever left empty. */
 const BASE_SECTION_CAST: string[][] = [
-  ["kick", "hat"],
-  ["kick", "hat", "snare", "bass"],
-  ["kick", "hat", "snare", "bass", "keys", "marimba"],
+  ["kick", "hat", "organ"],
+  ["kick", "hat", "snare", "bass", "sub"],
+  ["kick", "hat", "snare", "bass", "sub", "keys", "marimba", "didge"],
   BASE_BAND.map((member) => member.key),
-  ["hat", "bass", "glock", "laser"],
-  ["kick", "hat", "snare", "bass", "keys"],
-  ["kick", "hat", "clap", "bass", "marimba", "glock"],
+  ["hat", "bass", "glock", "laser", "didge", "flute"],
+  ["kick", "hat", "snare", "bass", "sub", "keys", "flute"],
+  ["kick", "hat", "clap", "bass", "marimba", "glock", "organ", "flute"],
   BASE_BAND.map((member) => member.key),
 ];
 // The low rider walks a little bassline: root, root, a step up, then down to the fifth.
 const BASSLINE_HEIGHTS = [0, 0, -40, 80];
+// The flute sings a tune over it: the fifth, up to the seventh, back, then down to the fourth.
+const FLUTE_HEIGHTS = [-120, -160, -120, -80];
 
-const BASE_BAND_VERSION = 1;
+/** Version 1 was the first eleven; version 2 added the bass section and the flute. */
+const BASE_BAND_VERSION = 2;
+const FIRST_BAND_SIZE = 11;
 const MAX_PERFORMERS = 24;
 
 /**
@@ -525,6 +570,7 @@ const MAX_PERFORMERS = 24;
  * band makes way, since these replace it.
  */
 export function withBaseBand(project: Project): Project {
+  if (project.baseBandVersion === 1) return withNewMembers(project);
   if (project.baseBandVersion) return project;
   const band = starterProject(project.seed);
   const own = project.performers.filter((p) => !p.assetId.startsWith("demo-"));
@@ -559,6 +605,40 @@ export function withBaseBand(project: Project): Project {
         ],
       };
     }),
+  });
+}
+
+/**
+ * A song saved with the first band gets the members added since, sitting out of the same
+ * sections they sit out of in a new song. Nothing already on stage changes.
+ */
+function withNewMembers(project: Project): Project {
+  const band = starterProject(project.seed);
+  const takenIds = new Set(project.performers.map((p) => p.id));
+  const takenAssets = new Set(project.assets.map((a) => a.id));
+  const members = band.performers
+    .slice(FIRST_BAND_SIZE)
+    .filter((p) => !takenIds.has(p.id) && !takenAssets.has(p.assetId))
+    .slice(0, Math.max(0, MAX_PERFORMERS - project.performers.length));
+  const memberIds = new Set(members.map((p) => p.id));
+  const sameShape = project.sections.length === band.sections.length;
+  return projectSchema.parse({
+    ...project,
+    baseBandVersion: BASE_BAND_VERSION,
+    assets: [
+      ...project.assets,
+      ...band.assets.filter((a) => members.some((p) => p.assetId === a.id)),
+    ],
+    performers: [...project.performers, ...members],
+    sections: project.sections.map((section, index) => ({
+      ...section,
+      mutedIds: [
+        ...section.mutedIds,
+        ...(sameShape
+          ? band.sections[index].mutedIds.filter((id) => memberIds.has(id))
+          : []),
+      ],
+    })),
   });
 }
 
@@ -597,6 +677,12 @@ export function starterProject(
             beat: (step + 1) * 4,
             x: member.position.x + (step % 2 ? 22 : 0),
             y: BASSLINE_HEIGHTS[(step + 1) % BASSLINE_HEIGHTS.length],
+          }))
+        : member.key === "flute"
+        ? Array.from({ length: 15 }, (_, step) => ({
+            beat: (step + 1) * 4,
+            x: member.position.x + (step % 2 ? -26 : 0),
+            y: FLUTE_HEIGHTS[(step + 1) % FLUTE_HEIGHTS.length],
           }))
         : [],
   }));

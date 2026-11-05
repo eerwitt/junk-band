@@ -108,7 +108,7 @@ describe("musical contract", () => {
       const project = starterProject(seed);
       assert.deepEqual(project, starterProject(seed));
       assert.equal(projectSchema.safeParse(project).success, true);
-      assert.equal(project.performers.length, 11);
+      assert.equal(project.performers.length, 15);
       assert.ok(project.assets.every((a) => a.provenance === "base band"));
       assert.ok(project.assets.every((a) => a.audioId.startsWith("band-")));
       assert.ok(project.assets.every((a) => a.sprite.startsWith("/band/")));
@@ -146,7 +146,7 @@ describe("musical contract", () => {
     assert.equal(saved.baseBandVersion, undefined);
     const merged = withBaseBand(saved);
     assert.equal(projectSchema.safeParse(merged).success, true);
-    assert.equal(merged.performers.length, 12);
+    assert.equal(merged.performers.length, 16);
     assert.ok(merged.performers.some((p) => p.id === "my-tin"));
     assert.ok(merged.assets.some((a) => a.id === "mine"));
     assert.ok(!merged.assets.some((a) => a.audioId.startsWith("demo-")));
@@ -167,7 +167,7 @@ describe("musical contract", () => {
     for (const section of trimmed.sections)
       section.mutedIds = section.mutedIds.filter((id) => id !== "p-0");
     assert.equal(withBaseBand(trimmed), trimmed);
-    assert.equal(withBaseBand(starterProject(4)).performers.length, 11);
+    assert.equal(withBaseBand(starterProject(4)).performers.length, 15);
     // A full stage only takes who fits.
     const full = demoProject();
     full.assets.push(clip);
@@ -178,6 +178,33 @@ describe("musical contract", () => {
     }));
     for (const section of full.sections) section.mutedIds = [];
     assert.equal(withBaseBand(full).performers.length, 24);
+  });
+  it("gives a song saved with the first band the new members, changing nothing else", () => {
+    const fresh = starterProject(9);
+    const newIds = fresh.performers.slice(11).map((p) => p.id);
+    const old = structuredClone(fresh);
+    old.baseBandVersion = 1;
+    old.performers = old.performers.slice(0, 11);
+    old.assets = old.assets.slice(0, 11);
+    for (const section of old.sections)
+      section.mutedIds = section.mutedIds.filter((id) => !newIds.includes(id));
+    old.performers[0].gainDb = -2;
+    old.sections[0].mutedIds.push("p-1");
+    const upgraded = withBaseBand(old);
+    assert.equal(projectSchema.safeParse(upgraded).success, true);
+    assert.equal(upgraded.baseBandVersion, fresh.baseBandVersion);
+    assert.equal(upgraded.performers.length, 15);
+    for (const key of ["sub", "organ", "didge", "flute"])
+      assert.ok(upgraded.assets.some((a) => a.audioId === `band-${key}`));
+    assert.equal(upgraded.performers[0].gainDb, -2, "Your changes stay");
+    assert.ok(upgraded.sections[0].mutedIds.includes("p-1"));
+    for (const [i, section] of upgraded.sections.entries())
+      for (const id of newIds)
+        assert.equal(
+          section.mutedIds.includes(id),
+          fresh.sections[i].mutedIds.includes(id)
+        );
+    assert.equal(withBaseBand(upgraded), upgraded, "Only once");
   });
   it("gives height a note, always in the scale, and leaves untuned sounds alone", () => {
     assert.equal(rowSemitones(0), 0);

@@ -391,8 +391,8 @@ def spotlit(page: Page) -> str | None:
 
 def check_rhythm_card_and_notes(page: Page, output: Path) -> None:
     project = page.evaluate("window.JUNK.snapshot().project")
-    assert len(project["performers"]) >= 11, "The base band is on stage in a new session"
-    assert page.evaluate("Object.keys(window.JUNK.layout.puppets).length") >= 11
+    assert len(project["performers"]) >= 15, "The base band is on stage in a new session"
+    assert page.evaluate("Object.keys(window.JUNK.layout.puppets).length") >= 15
     click_performer(page, "p-0")
     click_control(page, "punch")
     page.wait_for_function("window.JUNK.layout.controls.card_gallop.visible")
@@ -576,7 +576,7 @@ def main() -> None:
         )
         page.wait_for_timeout(700)
         initial_count = page.evaluate("window.JUNK.snapshot().project.performers.length")
-        assert initial_count == 11, initial_count
+        assert initial_count == 15, initial_count
         if args.autoplay_gesture_only:
             assert page.evaluate("window.JUNK.snapshot().playing"), (
                 "The default transport intent must be playing"
@@ -773,7 +773,7 @@ def main() -> None:
             "window.JUNK?.layout?.controls?.play && document.querySelector('#loading').hidden",
             timeout=60000,
         )
-        assert restored.evaluate("window.JUNK.snapshot().project.performers.length") == 11
+        assert restored.evaluate("window.JUNK.snapshot().project.performers.length") == 15
         click_control(restored, "help")
         with restored.expect_file_chooser() as chooser:
             restored.get_by_role("button", name="Open project", exact=True).click()

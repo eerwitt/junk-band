@@ -34,7 +34,7 @@ To use real models, copy `.env.example` to `.env`, set `MODEL_API_KEY` and/or Mo
 
 ## Playing
 
-- New sessions start with the base band: eleven painted characters with CC0 sounds (see `public/sounds/CREDITS.md`). Playback starts automatically, or on the first click if the browser blocks autoplay.
+- New sessions start with the base band: fifteen painted characters with CC0 sounds (see `public/sounds/CREDITS.md`). Playback starts automatically, or on the first click if the browser blocks autoplay.
 - **The ring is the song**: sixteen bars in eight sections. Drag along it to scrub; click a section to loop it, click the outer strip (or Escape) to return to the whole song. Drag a character off the stage to sit it out of a section.
 - **Tap a character** for its radial controls: volume, pitch/speed, pan, playback mode, rhythm card, duplicate, pencil (draw a motion path), eraser and skull (remove). Click empty stage or press Escape to close.
 - **Height sets the note** for tuned characters, snapped to one scale.
